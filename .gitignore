@@ -1,0 +1,12 @@
+.env
+backend/.env
+**/sessao_meli/
+temp/
+venv/
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.key
+*.xlsx
+*.csv

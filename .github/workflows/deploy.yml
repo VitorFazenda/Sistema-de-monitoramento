@@ -1,0 +1,24 @@
+name: Deploy Automático Oracle Cloud
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Atualizar Backend e Robô na Oracle via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 147.15.93.48
+          username: ubuntu
+          key: ${{ secrets.ORACLE_SSH_KEY }}
+          script: |
+            cd /home/ubuntu/APP
+            git fetch --all
+            git reset --hard origin/main
+            sudo systemctl restart jm-api
+            sudo systemctl restart jm-robo
+            

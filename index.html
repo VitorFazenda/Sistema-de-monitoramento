@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Monitoramento Corporativo</title>
+    
+    <!-- Bibliotecas Externas -->
+    <script src="https://cdn.jsdelivr.net/npm/ag-grid-community/dist/ag-grid-community.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community/styles/ag-grid.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community/styles/ag-theme-alpine.css">
+    
+    <!-- O nosso ficheiro de estilos CSS -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- ================= TELA DE LOGIN ================= -->
+    <div id="login-overlay">
+        <div class="login-box">
+            <h2>🔐 Acesso Seguro</h2>
+            <input type="text" id="login-user" class="login-input" placeholder="Utilizador" autocomplete="off" onkeypress="if(event.key === 'Enter') fazerLogin()">
+            <input type="password" id="login-pwd" class="login-input" placeholder="Palavra-passe" onkeypress="if(event.key === 'Enter') fazerLogin()">
+            <button class="btn-login" onclick="fazerLogin()">Entrar no Sistema</button>
+            <div id="login-erro"></div>
+        </div>
+    </div>
+
+    <!-- ================= NAVBAR ================= -->
+    <div class="navbar">
+        <div class="menu-icon" onclick="toggleMenu()">☰</div>
+        <div class="nav-logo">
+            <img src="logo.png" alt="Logo JM" class="nav-logo-img">
+            <span>Sistema de Monitoramento</span>
+        </div>
+        <div class="nav-right">
+            <div class="user-profile" onclick="document.getElementById('userMenu').classList.toggle('show')">
+                <div class="user-bubble" id="nome-usuario-logado">👤 User</div>
+                <div id="userMenu" class="user-menu-dropdown">
+                    <div class="user-menu-info">
+                        <div class="user-menu-nome" id="menu-nome">User</div>
+                        <div class="user-menu-cargo" id="menu-cargo">CARGO</div>
+                    </div>
+                    <button class="user-menu-btn" onclick="abrirModalEquipe()">⚙️ Gerenciar Equipa</button>
+                    <button class="user-menu-btn sair" onclick="fazerLogoff()">🚪 Sair do Sistema</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- ================= SIDEBAR ================= -->
+    <div class="sidebar" id="sidebar">
+        <button class="sidebar-btn ativo" id="btn-aba-inicio" onclick="mudarAba('aba-inicio', this)">Início</button>
+        <button class="sidebar-btn" id="btn-aba-monitoramento" onclick="mudarAba('aba-monitoramento', this)">Monitoramento de Rotas</button>
+        <button class="sidebar-btn" id="btn-aba-estatisticas" onclick="mudarAba('aba-estatisticas', this)">Estatísticas</button>
+        <button class="sidebar-btn" id="btn-aba-robo" onclick="mudarAba('aba-robo', this)">🤖 Área do Robô</button>
+    </div>
+
+    <div class="main-content" id="main-content">
+        
+        <!-- ================= TELA INICIAL (HOME CARDS) ================= -->
+        <div id="aba-inicio" class="conteudo-aba ativo">
+            <div class="home-wrapper">
+                <div class="home-welcome-banner">
+                    <div>
+                        <h1 id="home-saudacao">Bem-vindo(a) de volta!</h1>
+                        <p>Selecione um dos cards abaixo para iniciar a sua operação em tempo real.</p>
+                    </div>
+                    <div class="home-badge-info">
+                        <span>Nível de Acesso: <b id="home-cargo-badge">---</b></span>
+                        <span>HUBs: <b id="home-hubs-badge">---</b></span>
+                    </div>
+                </div>
+
+                <div class="home-cards-grid">
+                    <div class="home-card" onclick="navegarPelosCards('aba-monitoramento', 'btn-aba-monitoramento')">
+                        <div class="home-card-icon" style="background: #e0f2fe; color: #0284c7;">📋</div>
+                        <div class="home-card-body">
+                            <h3>Monitoramento de Rotas</h3>
+                            <p>Acompanhe a planilha interativa em tempo real, filtre por HUB, edite status operacionais e gira a escala de monitores por cluster.</p>
+                        </div>
+                        <div class="home-card-footer" style="justify-content: flex-end;">
+                            <span class="home-card-link">Aceder ao Módulo →</span>
+                        </div>
+                    </div>
+
+                    <div class="home-card" onclick="navegarPelosCards('aba-estatisticas', 'btn-aba-estatisticas')">
+                        <div class="home-card-icon" style="background: #dcfce7; color: #15803d;">📈</div>
+                        <div class="home-card-body">
+                            <h3>Estatísticas</h3>
+                            <p>Central analítica dividida entre Monitor de Pontualidade, Monitor de Ocorrência e visão Geral da Operação por HUB e período.</p>
+                        </div>
+                        <div class="home-card-footer" style="justify-content: flex-end;">
+                            <span class="home-card-link">Aceder ao Módulo →</span>
+                        </div>
+                    </div>
+
+                    <div class="home-card" onclick="navegarPelosCards('aba-robo', 'btn-aba-robo')">
+                        <div class="home-card-icon" style="background: #fef3c7; color: #d97706;">🤖</div>
+                        <div class="home-card-body">
+                            <h3>Área do Robô</h3>
+                            <p>Configure rotinas programadas ou extrações avulsas, acompanhe a fila de execução e visualize o terminal de telemetria ao vivo.</p>
+                        </div>
+                        <div class="home-card-footer">
+                            <span class="home-card-stat" id="home-stat-robo">🔴 Robô Offline</span>
+                            <span class="home-card-link">Aceder ao Módulo →</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= MONITORAMENTO (GRID E ESCALA) ================= -->
+        <div id="aba-monitoramento" class="conteudo-aba">
+            <div class="sub-navbar">
+                <div class="sub-navbar-tabs">
+                    <button class="sub-tab-btn ativo" onclick="mudarSubAba('sub-planilha', this)">Planilha de Rotas</button>
+                    <button class="sub-tab-btn" onclick="mudarSubAba('sub-escala', this)">Escala</button>
+                </div>
+            </div>
+
+            <!-- PLANILHA -->
+            <div id="sub-planilha" class="sub-conteudo ativo">
+                <div class="toolbar">
+                    <!-- DROP-DOWN DE CORES EDITÁVEIS -->
+                    <div class="color-dropdown">
+                        <button class="btn-acao" id="btn-cor-preenchimento" onclick="document.getElementById('colorMenu').classList.toggle('show')">🪣 Cor de Preenchimento ▼</button>
+                        <div id="colorMenu" class="color-menu">
+                            <div class="swatches-container" id="swatches-container">
+                                <!-- Cores Padrão -->
+                                <div class="swatch-wrap"><div class="swatch" style="background-color: #ff4d4d;" onclick="pintarCelulaFocada('#ff4d4d')" title="Vermelho"></div></div>
+                                <div class="swatch-wrap"><div class="swatch" style="background-color: #ffd700;" onclick="pintarCelulaFocada('#ffd700')" title="Amarelo"></div></div>
+                                <div class="swatch-wrap"><div class="swatch" style="background-color: #90ee90;" onclick="pintarCelulaFocada('#90ee90')" title="Verde Claro"></div></div>
+                                
+                                <!-- Divisória -->
+                                <div style="width: 1px; background: #ccc; margin: 0 5px;"></div>
+                                
+                                <!-- Cores Personalizadas Editáveis -->
+                                <div class="swatch-wrap">
+                                    <div class="swatch custom-swatch" id="custom-swatch-1" onclick="usarCorCustomizada(1)" title="Cor Personalizada 1">+</div>
+                                    <div class="swatch-edit" onclick="editarCorCustomizada(1)" title="Editar Cor 1">✏️</div>
+                                    <input type="color" id="color-picker-1" style="display: none;" onchange="salvarCorCustomizada(1, this.value)">
+                                </div>
+                                <div class="swatch-wrap">
+                                    <div class="swatch custom-swatch" id="custom-swatch-2" onclick="usarCorCustomizada(2)" title="Cor Personalizada 2">+</div>
+                                    <div class="swatch-edit" onclick="editarCorCustomizada(2)" title="Editar Cor 2">✏️</div>
+                                    <input type="color" id="color-picker-2" style="display: none;" onchange="salvarCorCustomizada(2, this.value)">
+                                </div>
+                            </div>
+                            <button class="btn-menu-item" onclick="pintarCelulaFocada('#ffffff')">⬜ Sem Preenchimento</button>
+                        </div>
+                    </div>
+                    
+                    <button class="btn-acao" onclick="abrirModalExportacao()" style="background-color: #e0f2fe; color: #0284c7; border-color: #bae6fd; font-weight: bold;">
+                        ⬇️ Baixar Planilha
+                    </button>
+
+                    <div style="margin-left: 20px; display: flex; align-items: center; gap: 8px; border-left: 2px solid #eee; padding-left: 20px;">
+                        <label style="font-size: 13px; font-weight: bold; color: #1a237e;">📍 Filtrar por HUB:</label>
+                        <select id="filtro-hub-planilha" onchange="aplicarFiltroHubPlanilha()" style="padding: 6px 10px; border-radius: 4px; border: 1px solid #ccc; font-weight: bold; color: #1a237e; outline: none; cursor: pointer; background: #f8fafc; min-width: 150px;">
+                            <option value="TODOS">Todos os HUBs</option>
+                        </select>
+                        
+                        <div style="margin-left: 10px; padding: 5px 12px; background: #e0f2fe; color: #0284c7; border-radius: 20px; font-size: 12px; font-weight: bold; border: 1px solid #bae6fd; display: flex; gap: 5px; align-items: center;">
+                            📊 Total: <span id="total-rotas-planilha" style="color: #0369a1; font-size: 14px;">0</span> rotas
+                        </div>
+                    </div>
+                </div>
+                <div id="myGrid" class="ag-theme-alpine"></div>
+            </div>
+
+            <!-- ESCALA -->
+            <div id="sub-escala" class="sub-conteudo">
+                <div class="escala-wrapper">
+                    <div class="escala-header">
+                        <div class="date-picker-group">
+                            <label>📅 Data da Operação:</label>
+                            <input type="date" id="data-escala" onchange="inicializarEscala()">
+
+                            <label style="margin-left: 20px;">📍 Filtrar HUB:</label>
+                            <select id="filtro-hub-escala" onchange="inicializarEscala()" style="padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; font-weight: bold; color: #1a237e; outline: none; cursor: pointer; background: #f8fafc; min-width: 150px;">
+                                <option value="TODOS">Todos os HUBs</option>
+                            </select>
+                        </div>
+
+                        <div style="display: flex; align-items: center; gap: 15px;">
+                            <div style="font-size:12px; color:#666; font-weight: 600;" id="aviso-salvamento">
+                                Preencha os monitores e clique em Salvar Escala.
+                            </div>
+                            <button id="btn-salvar-escala" class="btn-salvar-escala" onclick="salvarEscalaManual()">
+                                💾 Salvar Escala
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="escala-content-split">
+                        <div class="escala-body" id="escala-body"></div>
+                        <div id="escala-resumo-painel" class="escala-resumo-painel" style="display: none;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= ESTATÍSTICAS (BARRA UNIFICADA + 3 SUB-ABAS) ================= -->
+        <div id="aba-estatisticas" class="conteudo-aba">
+            <div class="sub-navbar sub-navbar-estatisticas">
+                <!-- Abas na Esquerda -->
+                <div class="sub-navbar-tabs">
+                    <button class="sub-tab-btn ativo" onclick="mudarSubAba('sub-pontualidade', this)">Monitor de Pontualidade</button>
+                    <button class="sub-tab-btn" onclick="mudarSubAba('sub-ocorrencia', this)">Monitor de Ocorrência</button>
+                    <button class="sub-tab-btn" onclick="mudarSubAba('sub-geral-operacao', this)">Geral da Operação</button>
+                </div>
+
+                <!-- Filtros Unificados, Configuração de Meta e Exportação Geral na Direita -->
+                <div class="sub-navbar-filters">
+                    <button id="btn-config-meta-nav" onclick="abrirModalConfigurarMeta()" class="btn-export-nav" style="background: #38bdf8; color: #0f172a;" title="Configurar Meta On-Time por Mês e HUB">
+                        🎯 CONFIGURAR META
+                    </button>
+
+                    <button onclick="exportarExcelFiltroCompleto()" class="btn-export-nav" title="Exportar Pontualidade, Ocorrências e Geral da Operação num único ficheiro">
+                        ⬇ EXPORTAR TUDO (FILTRO)
+                    </button>
+
+                    <div class="nav-filter-item">
+                        <label>📅 Data:</label>
+                        <select id="filtro-data-est" onchange="aplicarFiltroUnificadoEstatisticas()">
+                            <option value="TODAS">Todas as Datas</option>
+                        </select>
+                    </div>
+
+                    <div id="container-periodo-est" class="nav-period-box" style="display: none;">
+                        <input type="date" id="data-ini-est" onchange="aplicarFiltroUnificadoEstatisticas()">
+                        <span>até</span>
+                        <input type="date" id="data-fim-est" onchange="aplicarFiltroUnificadoEstatisticas()">
+                    </div>
+
+                    <div class="nav-filter-item">
+                        <label>📍 HUB:</label>
+                        <select id="filtro-hub-est" onchange="aplicarFiltroUnificadoEstatisticas()">
+                            <option value="TODOS">Todos os HUBs</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SUB-ABA 1: MONITOR DE PONTUALIDADE -->
+            <div id="sub-pontualidade" class="sub-conteudo ativo">
+                <div id="bi-wrapper">
+                    
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; flex-wrap: wrap; gap: 15px;">
+                        <div>
+                            <h2 style="margin-top: 0; margin-bottom: 5px; color: #0d1b3e;">Monitor Analítico de Pontualidade</h2>
+                            <p style="font-size: 12px; color: #4a5a7a; margin: 0;">
+                                Dados extraídos e calculados, baixados diretamente do relatório do Mercado Livre.<br>
+                                Filtro de permissão atual: <b id="bi-hub-label" style="color: #c2410c;">TODOS</b>.
+                            </p>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 12px; background: white; padding: 10px 15px; border-radius: 8px; border: 1px solid #dde3ef; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+                            <button onclick="exportarExcelBI()" style="padding: 8px 14px; background: #e5a800; color: #0d1b3e; border: none; border-radius: 6px; font-size: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 5px;">
+                                ⬇ EXPORTAR EXCEL GERAL
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- GRELHA DE KPIS -->
+                    <div class="bi-kpi-grid" id="bi-kpis"></div>
+
+                    <!-- BARRAS DE METAS -->
+                    <div class="bi-meta-bar" id="bi-meta-bar" style="display: none;">
+                        <div class="bi-meta-card" id="bi-meta-ontime"></div>
+                        <div class="bi-meta-card" id="bi-meta-early"></div>
+                    </div>
+
+                    <!-- DISTRIBUIÇÃO DE PACOTES POR PONTUALIDADE -->
+                    <div id="bi-pkgs-panel" class="bi-pkgs-panel" style="display: none;"></div>
+
+                    <!-- SECÇÃO DE ABAS DETALHADAS DO BI -->
+                    <div class="bi-section">
+                        <div class="bi-tab-bar">
+                            <div class="bi-tab active" onclick="switchBITab('bi-tab-1', this)">⚠️ 1ª Parada Antecipada</div>
+                            <div class="bi-tab" onclick="switchBITab('bi-tab-6', this)">⏳ Tempo fora da janela</div>
+                            <div class="bi-tab" onclick="switchBITab('bi-tab-2', this)">🏆 Ranking Motoristas</div>
+                            <div class="bi-tab" onclick="switchBITab('bi-tab-3', this)">🗺️ Rotas Ofensoras</div>
+                            <div class="bi-tab" onclick="switchBITab('bi-tab-4', this)">📍 Por Cluster</div>
+                            <div class="bi-tab" onclick="switchBITab('bi-tab-5', this)">📋 Todas as Paradas</div>
+                        </div>
+
+                        <!-- Tab 1: 1ª Parada Antecipada -->
+                        <div id="bi-tab-1" class="bi-tab-content active">
+                            <div id="bi-alert-first"></div>
+                            <div class="bi-controls">
+                                <label>Buscar:</label>
+                                <input type="text" id="bi-search-first" placeholder="Motorista, rota, parada..." oninput="renderBIFirst()">
+                                <button onclick="exportarEstratificacao('first')" class="bi-btn-estratificacao">⬇ Exportar Estratificação</button>
+                            </div>
+                            <div class="bi-tbl-wrap"><table class="bi-table" id="bi-tbl-first"><thead></thead><tbody></tbody></table></div>
+                            <div class="bi-footer-info" id="bi-footer-first"></div>
+                        </div>
+                        
+                        <!-- Tab 6: Tempo Fora da Janela -->
+                        <div id="bi-tab-6" class="bi-tab-content">
+                            <div class="bi-controls">
+                                <label>Buscar:</label>
+                                <input type="text" id="bi-search-time" placeholder="Motorista, rota, parada..." oninput="renderBITime()">
+                                <label>Intervalo:</label>
+                                <select id="bi-filter-time" onchange="renderBITime()">
+                                    <option value="all">Todos</option>
+                                    <option value="0-5">0 a 5 minutos</option>
+                                    <option value="5-15">5 a 15 minutos</option>
+                                    <option value="15-30">15 a 30 minutos</option>
+                                    <option value="30-60">30 a 60 minutos</option>
+                                    <option value="60+">Mais de 60 minutos</option>
+                                </select>
+                                <button onclick="exportarEstratificacao('time')" class="bi-btn-estratificacao">⬇ Exportar Estratificação</button>
+                            </div>
+                            <div class="bi-tbl-wrap"><table class="bi-table" id="bi-tbl-time"><thead></thead><tbody></tbody></table></div>
+                            <div class="bi-footer-info" id="bi-footer-time"></div>
+                        </div>
+
+                        <!-- Tab 2: Ranking Motoristas -->
+                        <div id="bi-tab-2" class="bi-tab-content">
+                            <div class="bi-controls">
+                                <label>Buscar ID:</label>
+                                <input type="text" id="bi-search-drivers" placeholder="ID do motorista..." oninput="renderBIDrivers()">
+                                <label>Filtrar:</label>
+                                <select id="bi-filter-drivers" onchange="renderBIDrivers()">
+                                    <option value="all">Todos ofensores</option>
+                                    <option value="early">Com antecipações</option>
+                                    <option value="late">Com atrasos</option>
+                                    <option value="first">Antecip. 1ª parada</option>
+                                </select>
+                                <button onclick="exportarEstratificacao('drivers')" class="bi-btn-estratificacao">⬇ Exportar Estratificação</button>
+                            </div>
+                            <div class="bi-tbl-wrap"><table class="bi-table" id="bi-tbl-drivers"><thead></thead><tbody></tbody></table></div>
+                            <div class="bi-footer-info" id="bi-footer-drivers"></div>
+                        </div>
+
+                        <!-- Tab 3: Rotas Ofensoras -->
+                        <div id="bi-tab-3" class="bi-tab-content">
+                            <div class="bi-controls">
+                                <label>Buscar:</label>
+                                <input type="text" id="bi-search-routes" placeholder="Rota, motorista..." oninput="renderBIRoutes()">
+                                <label>Tipo:</label>
+                                <select id="bi-filter-routes" onchange="renderBIRoutes()">
+                                    <option value="all">Early + Late</option>
+                                    <option value="early">Só antecipações</option>
+                                    <option value="late">Só atrasos</option>
+                                </select>
+                                <button onclick="exportarEstratificacao('routes')" class="bi-btn-estratificacao">⬇ Exportar Estratificação</button>
+                            </div>
+                            <div class="bi-tbl-wrap"><table class="bi-table" id="bi-tbl-routes"><thead></thead><tbody></tbody></table></div>
+                            <div class="bi-footer-info" id="bi-footer-routes"></div>
+                        </div>
+
+                        <!-- Tab 4: Por Cluster -->
+                        <div id="bi-tab-4" class="bi-tab-content">
+                            <div class="bi-controls">
+                                <label>Buscar cluster:</label>
+                                <input type="text" id="bi-search-clusters" placeholder="Ex: C06, C12..." oninput="renderBIClusters()">
+                                <label>Ordenar por:</label>
+                                <select id="bi-sort-clusters" onchange="renderBIClusters()">
+                                    <option value="early">Mais antecipações</option>
+                                    <option value="late">Mais atrasos</option>
+                                    <option value="ontime_asc">Pior On Time</option>
+                                    <option value="ontime_desc">Melhor On Time</option>
+                                    <option value="name">Nome</option>
+                                </select>
+                                <button onclick="exportarEstratificacao('clusters')" class="bi-btn-estratificacao">⬇ Exportar Estratificação</button>
+                                <div style="display: flex; gap: 6px; margin-left: auto;">
+                                    <button class="bi-toggle-btn active" id="bi-view-cards" onclick="setBIClusterView('cards')">🃏 Cards</button>
+                                    <button class="bi-toggle-btn" id="bi-view-table" onclick="setBIClusterView('table')">📊 Tabela</button>
+                                </div>
+                            </div>
+                            <div id="bi-cluster-cards-view"><div class="bi-cluster-grid" id="bi-clusters-grid" style="padding: 18px;"></div></div>
+                            <div id="bi-cluster-table-view" style="display: none;">
+                                <div class="bi-tbl-wrap"><table class="bi-table" id="bi-tbl-clusters"><thead></thead><tbody></tbody></table></div>
+                                <div class="bi-footer-info" id="bi-footer-clusters"></div>
+                            </div>
+                        </div>
+
+                        <!-- Tab 5: Todas as Paradas -->
+                        <div id="bi-tab-5" class="bi-tab-content">
+                            <div class="bi-controls">
+                                <label>Buscar:</label>
+                                <input type="text" id="bi-search-all" placeholder="Rota, motorista, parada..." oninput="renderBIAll()">
+                                <label>Status:</label>
+                                <select id="bi-filter-all" onchange="renderBIAll()">
+                                    <option value="offenders">Apenas ofensores</option>
+                                    <option value="early">Antecipações</option>
+                                    <option value="late">Atrasos</option>
+                                    <option value="all">Todos</option>
+                                </select>
+                                <button onclick="exportarEstratificacao('all')" class="bi-btn-estratificacao">⬇ Exportar Estratificação</button>
+                            </div>
+                            <div class="bi-tbl-wrap"><table class="bi-table" id="bi-tbl-all"><thead></thead><tbody></tbody></table></div>
+                            <div class="bi-footer-info" id="bi-footer-all"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SUB-ABA 2: MONITOR DE OCORRÊNCIA -->
+            <div id="sub-ocorrencia" class="sub-conteudo">
+                <div id="oc-wrapper" style="padding: 24px; background: #eef1f7; height: 100%; overflow-y: auto; box-sizing: border-box;">
+                    
+                    <!-- Header e Botão de Exportação Individual -->
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; flex-wrap: wrap; gap: 15px;">
+                        <div>
+                            <h2 style="margin-top: 0; margin-bottom: 5px; color: #0d1b3e;">Monitor Analítico de Ocorrências</h2>
+                            <p style="font-size: 12px; color: #4a5a7a; margin: 0;">
+                                Estratificação fiel à coluna de Motivo do relatório oficial do Mercado Livre.<br>
+                                Filtro de permissão atual: <b id="oc-hub-label" style="color: #c2410c;">TODOS</b>.
+                            </p>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 12px; background: white; padding: 10px 15px; border-radius: 8px; border: 1px solid #dde3ef; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+                            <button onclick="exportarExcelOC()" style="padding: 8px 14px; background: #e5a800; color: #0d1b3e; border: none; border-radius: 6px; font-size: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 5px;">
+                                ⬇ EXPORTAR EXCEL GERAL
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- GRELHA DE KPIS -->
+                    <div class="bi-kpi-grid" id="oc-kpis"></div>
+
+                    <!-- Layout Dividido em Tabela Geral de Ocorrências e Tabela de Detalhes -->
+                    <div style="display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap;">
+                        
+                        <!-- Tabela Geral de Ocorrências (Pivot) -->
+                        <div class="bi-section" style="flex: 0.9; min-width: 320px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+                            <div class="bi-tab-bar" style="background: #1e293b; color: white; padding: 12px 18px; border-radius: 10px 10px 0 0; font-size: 14px; display: flex; justify-content: space-between; align-items: center;">
+                                <span>📊 Tabela geral de ocorrências</span>
+                                <span style="font-size: 11px; font-weight: normal; opacity: 0.8;">Clique para filtrar</span>
+                            </div>
+                            <div class="bi-tbl-wrap" style="max-height: 450px; overflow-y: auto;">
+                                <table class="bi-table oc-table-interactive" id="oc-tbl-pivot" style="width: 100%;">
+                                    <thead>
+                                        <tr>
+                                            <th>Motivos</th>
+                                            <th style="text-align: right;">Soma de Pacotes estimados</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                            </div>
+                            <div class="bi-footer-info" id="oc-footer-pivot" style="background: #f8fafc; font-weight: bold; text-align: right; color: #0d1b3e; padding: 12px 18px;">
+                                Total Geral: 0
+                            </div>
+                        </div>
+
+                        <!-- Tabela de Detalhes (Reativa e Editável) -->
+                        <div class="bi-section" style="flex: 2.1; min-width: 560px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+                            <div class="bi-tab-bar" style="background: #0f172a; color: white; padding: 12px 18px; border-radius: 10px 10px 0 0; display: flex; justify-content: space-between; align-items: center;">
+                                <span id="oc-details-title" style="font-size: 14px;">📋 Todas as Ocorrências</span>
+                                <button onclick="limparFiltroMotivoOC()" id="btn-limpar-motivo-oc" style="display: none; padding: 5px 12px; background: #ef4444; color: white; border: none; border-radius: 6px; font-size: 11px; cursor: pointer; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
+                                    ❌ Remover Filtro
+                                </button>
+                            </div>
+                            <div class="bi-controls" style="background: #f8fafc;">
+                                <label>Buscar:</label>
+                                <input type="text" id="oc-search-details" placeholder="Rota, motorista, parada..." oninput="renderOCDetails()" style="flex: 1; max-width: 300px;">
+                                <button onclick="exportarEstratificacaoOC()" class="bi-btn-estratificacao">⬇ Exportar Detalhes</button>
+                            </div>
+                            <div class="bi-tbl-wrap" style="max-height: 430px; overflow-y: auto;">
+                                <table class="bi-table" id="oc-tbl-details">
+                                    <thead>
+                                        <tr>
+                                            <th>ID Rota</th>
+                                            <th>Motorista</th>
+                                            <th>Parada</th>
+                                            <th>Motivo</th>
+                                            <th style="text-align: center;">Pcts Est.</th>
+                                            <th style="text-align: center;">Pcts Col.</th>
+                                            <th style="text-align: center;">Revertido</th>
+                                            <th>Observações</th>
+                                            <th>Detalhes / Evidência</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                            </div>
+                            <div class="bi-footer-info" id="oc-footer-details"></div>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+
+            <!-- SUB-ABA 3: GERAL DA OPERAÇÃO (BI CONSOLIDADO COMPACTO) -->
+            <div id="sub-geral-operacao" class="sub-conteudo">
+                <div id="go-wrapper" style="padding: 18px 24px; background: #eef1f7; height: 100%; overflow-y: auto; box-sizing: border-box;">
+                    
+                    <!-- Cabeçalho e Botão de Exportação Individual -->
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 12px;">
+                        <div>
+                            <h2 style="margin-top: 0; margin-bottom: 3px; color: #0d1b3e; font-size: 20px;">Visão Geral Consolidada da Operação</h2>
+                            <p style="font-size: 11.5px; color: #4a5a7a; margin: 0;">
+                                Painel executivo unificado: gráfico de On-Time Geral, ofensores por motivo (> 100 pacotes) e controle de reversão. Filtro atual: <b id="go-hub-label" style="color: #c2410c;">TODOS</b>.
+                            </p>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 10px; background: white; padding: 7px 12px; border-radius: 8px; border: 1px solid #dde3ef; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+                            <button onclick="exportarExcelGeralOperacao()" style="padding: 6px 12px; background: #e5a800; color: #0d1b3e; border: none; border-radius: 6px; font-size: 11.5px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 5px;">
+                                ⬇ EXPORTAR EXCEL GERAL
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- TOPO COMPACTO: ESQUERDA (GRÁFICO + LEGENDA) | DIREITA (3 CARDS EMPILHADOS) -->
+                    <div class="go-top-dashboard">
+                        <div class="go-chart-section" id="go-ontime-chart-panel"></div>
+                        <div class="go-main-kpis-stacked" id="go-kpis"></div>
+                    </div>
+
+                    <!-- SECÇÃO DE OCORRÊNCIAS SEPARADAS ESTILO TABELA DINÂMICA -->
+                    <div class="bi-section" style="padding: 16px 20px; background: #fff; border: 1px solid #dde3ef; border-radius: 10px; margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 10px; border-bottom: 2px solid #f0f3f9; padding-bottom: 10px;">
+                            <div>
+                                <h3 style="margin: 0; color: #0d1b3e; font-size: 15px; text-transform: uppercase; letter-spacing: 0.3px;">🚨 RESUMO DE GERAL DAS OCORRÊNCIAS</h3>
+                                <p style="margin: 3px 0 0 0; font-size: 12px; color: #64748b;">Lista de ocorrências e sua ofensas acima de 100 pacotes</p>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <label style="font-size: 12px; font-weight: 600; color: #4a5a7a;">Filtro de Corte:</label>
+                                <select id="go-filtro-corte-pcts" onchange="renderizarGeralOperacao()" style="padding: 5px 10px; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 12px; font-weight: bold; color: #1a237e; cursor: pointer;">
+                                    <option value="100" selected>Acima de 100 pacotes (Críticas)</option>
+                                    <option value="50">Acima de 50 pacotes</option>
+                                    <option value="0">Mostrar todas as rotas com ocorrência</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div id="go-ocorrencias-grid" class="go-ocorrencias-grid"></div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= ABA DO ROBÔ ================= -->
+        <div id="aba-robo" class="conteudo-aba">
+            <div class="robo-container">
+                
+                <div id="modal-overlay-config" onclick="fecharEdicaoTicket()"></div>
+
+                <div class="painel-hubs">
+
+                    <!-- CENTRAL DE AUTENTICAÇÃO OKTA E CONTROLO DA SESSÃO DO ROBÔ -->
+                    <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: white; padding: 16px; border-radius: 8px; margin-bottom: 18px; border: 1px solid #334155; box-shadow: 0 4px 12px rgba(0,0,0,0.12);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span style="font-size: 18px;">🔐</span>
+                                <div>
+                                    <div style="font-weight: 800; font-size: 13.5px; color: #f8fafc;">Autenticação Okta & Controlo do Site</div>
+                                    <div style="font-size: 11px; color: #94a3b8;">Envie os 6 dígitos do Okta Verify. O robô avança e injeta a senha automaticamente.</div>
+                                </div>
+                            </div>
+                            <span id="badge-status-sessao-okta" style="background: #334155; color: #cbd5e1; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 800;">
+                                ⏳ A VERIFICAR...
+                            </span>
+                        </div>
+
+                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <input type="text" id="input-codigo-okta" maxlength="7" placeholder="Código 6 dígitos (Ex: 838683)" style="flex: 1; min-width: 170px; padding: 9px 12px; border-radius: 6px; border: 1px solid #475569; background: #0f172a; color: #ffd700; font-weight: 800; font-size: 14px; letter-spacing: 2px; text-align: center; outline: none;" onkeypress="if(event.key === 'Enter') enviarCodigoOktaPainel()">
+                            
+                            <button onclick="enviarCodigoOktaPainel()" style="background: #10b981; color: #052e16; border: none; padding: 9px 14px; border-radius: 6px; font-weight: 800; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 5px; transition: 0.2s;">
+                                🔑 Ativar / Enviar Código
+                            </button>
+
+                            <button onclick="reiniciarLoginRoboPainel()" style="background: #f59e0b; color: #0f172a; border: none; padding: 9px 12px; border-radius: 6px; font-weight: 800; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 5px; transition: 0.2s;" title="Caso o site tenha dado erro de tempo, recarrega a página do Meli e preenche o utilizador novamente">
+                                🔄 Recarregar Site / Reiniciar Login
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="painel-config-robo">
+                        <h3 id="titulo-config-robo" style="color: #1a237e; margin-top: 0; border-bottom: 2px solid #eee; padding-bottom: 10px;">⚙️ Configurar Nova Rotina</h3>
+                        <div style="background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0;">
+                            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                                <div style="flex: 1;">
+                                    <label class="robo-label">
+                                        NOME DO HUB
+                                        <div class="tooltip">?
+                                            <span class="tooltip-text">
+                                                <b style="color:#60a5fa;">⚡ Raspagem:</b> O robô vai ler a página de monitoramento Meli e puxar as informações de rotas. Quando vazio ele seleciona todos os HUBs, ou você digita o HUB específico de raspagem.<br><br>
+                                                <b style="color:#60a5fa;">📥 Relatório:</b> O robô vai baixar o relatório do site do Meli e puxar as informações de rotas. Quando vazio ele seleciona todos os HUBs, ou você digita o HUB específico de raspagem.
+                                            </span>
+                                        </div>
+                                    </label>
+                                    <input type="text" id="config-hub" placeholder="Ex: BRXSP16 (Vazio = TODOS)" class="robo-input" style="text-transform: uppercase;" oninput="this.value = this.value.toUpperCase();">
+                                </div>
+                                <div style="flex: 1;">
+                                    <label class="robo-label">TAREFA DO ROBÔ</label>
+                                    <select id="config-acao" class="robo-input" onchange="mudarTipoTicket()">
+                                        <option value="monitoramento" id="opt-raspagem">⚡ Raspagem de Monitoramento</option>
+                                        <option value="relatorio">📥 Download de Relatório</option>
+                                    </select>
+                                </div>
+                                <div style="flex: 1;" id="div-config-tipo">
+                                    <label class="robo-label">TIPO DE EXECUÇÃO</label>
+                                    <select id="config-tipo" class="robo-input" onchange="mudarTipoTicket()">
+                                        <option value="avulso">🚀 Avulso (Executar Agora)</option>
+                                        <option value="rotina" id="opt-rotina">⏱️ Rotina Programada</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div id="painel-opcoes-relatorio" style="display: none; border-top: 1px dashed #cbd5e1; padding-top: 15px; margin-top: 5px;">
+                                <label style="font-size: 11px; font-weight: bold; color: #1a237e;">OPÇÕES DE EXTRAÇÃO DO RELATÓRIO</label>
+                                <div style="display: flex; gap: 10px; margin-top: 10px; align-items: center;">
+                                    <div style="flex: 1; background: #e2e8f0; padding: 8px; border-radius: 4px; text-align: center; border: 1px solid #ccc;">
+                                        <label style="font-size: 11px; font-weight: bold; color: #64748b; display: block; margin-bottom: 2px;">DATA DA EXTRAÇÃO</label>
+                                        <span id="label-data-hoje" style="font-weight: bold; color: #333; font-size: 13px;">--/--/----</span>
+                                    </div>
+                                    <div style="flex: 1.5;">
+                                        <label class="robo-label">DESTINO DO ARQUIVO</label>
+                                        <select id="config-destino" class="robo-input">
+                                            <option value="sistema" id="opt-destino-sistema">💾 Apenas no Banco de Dados</option>
+                                            <option value="local">💻 Extrair para o Meu PC</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div id="painel-programacao" style="display: none; border-top: 1px dashed #cbd5e1; padding-top: 15px; margin-top: 5px;">
+                                <label style="font-size: 11px; font-weight: bold; color: #1a237e;">PERSONALIZAÇÃO DE INTERVALOS DA SEMANA</label>
+                                <div id="dias-config-container" style="display: flex; flex-direction: column; gap: 10px; margin-top: 10px; max-height: 350px; overflow-y: auto; padding-right: 5px;">
+                                    
+                                    <div class="dia-config-block">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-bottom: 10px;">
+                                            <label style="font-weight: bold; cursor: pointer; color: #1a237e; font-size: 14px;"><input type="checkbox" class="chk-dia" value="Segunda" checked onchange="toggleDia('Segunda')"> Segunda-feira</label>
+                                            <button id="btn-add-Segunda" class="btn-acao-small" onclick="adicionarSlot('Segunda')">➕ Adicionar Horário</button>
+                                        </div>
+                                        <div id="slots-Segunda" class="slots-container">
+                                            <div class="slot-row">
+                                                <span class="slot-label">Intervalo:</span><input type="number" class="int-val" value="5" min="1"><span class="slot-label">min</span>
+                                                <span class="slot-label" style="margin-left:10px;">De:</span><input type="time" class="ini-val" value="07:00">
+                                                <span class="slot-label" style="margin-left:10px;">Até:</span><input type="time" class="fim-val" value="19:00">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="dia-config-block">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-bottom: 10px;">
+                                            <label style="font-weight: bold; cursor: pointer; color: #1a237e; font-size: 14px;"><input type="checkbox" class="chk-dia" value="Terca" onchange="toggleDia('Terca')"> Terça-feira</label>
+                                            <button id="btn-add-Terca" class="btn-acao-small" onclick="adicionarSlot('Terca')">➕ Adicionar Horário</button>
+                                        </div>
+                                        <div id="slots-Terca" class="slots-container" style="opacity: 0.5; pointer-events: none;">
+                                            <div class="slot-row">
+                                                <span class="slot-label">Intervalo:</span><input type="number" class="int-val" value="5" min="1"><span class="slot-label">min</span>
+                                                <span class="slot-label" style="margin-left:10px;">De:</span><input type="time" class="ini-val" value="07:00">
+                                                <span class="slot-label" style="margin-left:10px;">Até:</span><input type="time" class="fim-val" value="19:00">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="dia-config-block">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-bottom: 10px;">
+                                            <label style="font-weight: bold; cursor: pointer; color: #1a237e; font-size: 14px;"><input type="checkbox" class="chk-dia" value="Quarta" onchange="toggleDia('Quarta')"> Quarta-feira</label>
+                                            <button id="btn-add-Quarta" class="btn-acao-small" onclick="adicionarSlot('Quarta')">➕ Adicionar Horário</button>
+                                        </div>
+                                        <div id="slots-Quarta" class="slots-container" style="opacity: 0.5; pointer-events: none;">
+                                            <div class="slot-row">
+                                                <span class="slot-label">Intervalo:</span><input type="number" class="int-val" value="5" min="1"><span class="slot-label">min</span>
+                                                <span class="slot-label" style="margin-left:10px;">De:</span><input type="time" class="ini-val" value="07:00">
+                                                <span class="slot-label" style="margin-left:10px;">Até:</span><input type="time" class="fim-val" value="19:00">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="dia-config-block">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-bottom: 10px;">
+                                            <label style="font-weight: bold; cursor: pointer; color: #1a237e; font-size: 14px;"><input type="checkbox" class="chk-dia" value="Quinta" onchange="toggleDia('Quinta')"> Quinta-feira</label>
+                                            <button id="btn-add-Quinta" class="btn-acao-small" onclick="adicionarSlot('Quinta')">➕ Adicionar Horário</button>
+                                        </div>
+                                        <div id="slots-Quinta" class="slots-container" style="opacity: 0.5; pointer-events: none;">
+                                            <div class="slot-row">
+                                                <span class="slot-label">Intervalo:</span><input type="number" class="int-val" value="5" min="1"><span class="slot-label">min</span>
+                                                <span class="slot-label" style="margin-left:10px;">De:</span><input type="time" class="ini-val" value="07:00">
+                                                <span class="slot-label" style="margin-left:10px;">Até:</span><input type="time" class="fim-val" value="19:00">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="dia-config-block">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-bottom: 10px;">
+                                            <label style="font-weight: bold; cursor: pointer; color: #1a237e; font-size: 14px;"><input type="checkbox" class="chk-dia" value="Sexta" onchange="toggleDia('Sexta')"> Sexta-feira</label>
+                                            <button id="btn-add-Sexta" class="btn-acao-small" onclick="adicionarSlot('Sexta')">➕ Adicionar Horário</button>
+                                        </div>
+                                        <div id="slots-Sexta" class="slots-container" style="opacity: 0.5; pointer-events: none;">
+                                            <div class="slot-row">
+                                                <span class="slot-label">Intervalo:</span><input type="number" class="int-val" value="5" min="1"><span class="slot-label">min</span>
+                                                <span class="slot-label" style="margin-left:10px;">De:</span><input type="time" class="ini-val" value="07:00">
+                                                <span class="slot-label" style="margin-left:10px;">Até:</span><input type="time" class="fim-val" value="19:00">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="dia-config-block">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-bottom: 10px;">
+                                            <label style="font-weight: bold; cursor: pointer; color: #1a237e; font-size: 14px;"><input type="checkbox" class="chk-dia" value="Sabado" onchange="toggleDia('Sabado')"> Sábado</label>
+                                            <button id="btn-add-Sabado" class="btn-acao-small" onclick="adicionarSlot('Sabado')">➕ Adicionar Horário</button>
+                                        </div>
+                                        <div id="slots-Sabado" class="slots-container" style="opacity: 0.5; pointer-events: none;">
+                                            <div class="slot-row">
+                                                <span class="slot-label">Intervalo:</span><input type="number" class="int-val" value="60" min="1"><span class="slot-label">min</span>
+                                                <span class="slot-label" style="margin-left:10px;">De:</span><input type="time" class="ini-val" value="08:00">
+                                                <span class="slot-label" style="margin-left:10px;">Até:</span><input type="time" class="fim-val" value="14:00">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="dia-config-block">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-bottom: 10px;">
+                                            <label style="font-weight: bold; cursor: pointer; color: #1a237e; font-size: 14px;"><input type="checkbox" class="chk-dia" value="Domingo" onchange="toggleDia('Domingo')"> Domingo</label>
+                                            <button id="btn-add-Domingo" class="btn-acao-small" onclick="adicionarSlot('Domingo')">➕ Adicionar Horário</button>
+                                        </div>
+                                        <div id="slots-Domingo" class="slots-container" style="opacity: 0.5; pointer-events: none;">
+                                            <div class="slot-row">
+                                                <span class="slot-label">Intervalo:</span><input type="number" class="int-val" value="60" min="1"><span class="slot-label">min</span>
+                                                <span class="slot-label" style="margin-left:10px;">De:</span><input type="time" class="ini-val" value="08:00">
+                                                <span class="slot-label" style="margin-left:10px;">Até:</span><input type="time" class="fim-val" value="12:00">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div style="display: flex; gap: 10px; margin-top: 15px;">
+                                <button id="btn-cancelar-edicao" class="btn-footer-cancel" style="display: none; flex: 0.5; justify-content: center;" onclick="fecharEdicaoTicket()">Cancelar</button>
+                                <button id="btn-salvar-form" class="btn-salvar-robo" style="flex: 1;" onclick="salvarConfiguracao()">💾 Salvar Configuração do HUB</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <h3 style="color: #1a237e; margin-top: 10px; border-bottom: 2px solid #eee; padding-bottom: 10px;">📋 Rotinas Ativas & Fila</h3>
+                    <div id="lista-tickets-container" style="display: flex; flex-direction: column; gap: 10px; overflow-y: auto;"></div>
+                </div>
+
+                <div class="painel-terminal">
+                    <div class="terminal-header">
+                        <span>>_ CONSOLE DO ROBÔ M.L</span>
+                        <span id="status-robo-text" style="color: #ef4444; display: flex; align-items: center; gap: 5px;">
+                            <div id="status-robo-luz" style="width: 8px; height: 8px; background-color: #ef4444; box-shadow: 0 0 5px #ef4444; border-radius: 50%;"></div> 
+                            <b id="status-robo-label">OFFLINE</b>
+                        </span>
+                    </div>
+                    <div class="terminal-body" id="terminal-logs">
+                        <span style="color: #94a3b8;">[SISTEMA]</span> Painel de controlo inicializado.<br>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL DE EXPORTAÇÃO (PLANILHA DE ROTAS) -->
+    <div id="exportModal" class="modal-overlay">
+        <div class="modal-content" style="width: 450px;">
+            <div class="modal-header">
+                📥 Exportar Dados
+                <span style="cursor:pointer; opacity:0.8;" onclick="fecharModalExportacao()">❌</span>
+            </div>
+            <div style="padding: 20px; max-height: 400px; overflow-y: auto;">
+                <p style="font-size: 13px; color: #475569; margin-top:0; margin-bottom: 10px;">Selecione as colunas para o ficheiro final.</p>
+                <div style="display:flex; gap:10px; margin-bottom: 10px;">
+                    <button class="btn-acao-small" style="flex:1; justify-content:center; background:#e0f2fe; color:#0284c7; border-color:#bae6fd;" onclick="marcarTodasColunasExport(true)">✅ Marcar Todas</button>
+                    <button class="btn-acao-small" style="flex:1; justify-content:center; background:#fee2e2; color:#ef4444; border-color:#fecaca;" onclick="marcarTodasColunasExport(false)">⬜ Desmarcar Todas</button>
+                </div>
+                <div id="colunas-export-list" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 15px; background: #f8fafc; padding: 15px; border-radius: 6px; border: 1px solid #e2e8f0;"></div>
+            </div>
+            <div style="padding: 15px 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: 10px; background: #f1f5f9;">
+                <button class="btn-footer-cancel" onclick="fecharModalExportacao()">Cancelar</button>
+                <button class="btn-footer-confirm" onclick="confirmarExportacao()">Baixar CSV</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL DE CONFIGURAÇÃO DE META ON TIME (POR MÊS / DATA E HUB) -->
+    <div id="modalMetaOnTime" class="modal-overlay">
+        <div class="modal-content" style="width: 520px; max-width: 95vw;">
+            <div class="modal-header" style="background: #1a237e;">
+                🎯 Configurar Meta On-Time (Por Mês e HUB)
+                <span style="cursor:pointer; opacity:0.8;" onclick="document.getElementById('modalMetaOnTime').classList.remove('show')">❌</span>
+            </div>
+            <div style="padding: 20px; max-height: 75vh; overflow-y: auto;">
+                <p style="font-size: 12.5px; color: #475569; margin-top:0; margin-bottom: 15px;" id="texto-hub-meta">
+                    Defina a Meta On-Time (%) para um mês específico ou como padrão geral. O sistema adapta a meta automaticamente conforme a data filtrada.
+                </p>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                    <div>
+                        <label class="robo-label">📍 HUB ALVO</label>
+                        <select id="meta-hub-select" class="login-input" style="margin-bottom: 0; font-weight: bold; color: #1a237e; cursor: pointer;" onchange="atualizarInputValorMetaModal()">
+                            <option value="TODOS">TODOS (Meta Global)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="robo-label">📅 ESCOPO DE DATA</label>
+                        <select id="meta-escopo-mes" class="login-input" style="margin-bottom: 0; font-weight: bold; color: #1a237e; cursor: pointer;" onchange="alternarEscopoMesMeta()">
+                            <option value="MES">Mês Específico</option>
+                            <option value="PADRAO">Padrão Geral (Qualquer Data)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div id="box-meta-mes-input" style="margin-bottom: 12px;">
+                    <label class="robo-label">🗓️ SELECIONE O MÊS / ANO DE VIGÊNCIA</label>
+                    <input type="month" id="meta-mes-input" class="login-input" style="margin-bottom: 0; font-weight: bold; color: #0d1b3e; cursor: pointer;" onchange="atualizarInputValorMetaModal()">
+                </div>
+
+                <div style="margin-bottom: 15px;">
+                    <label class="robo-label">🎯 META ON-TIME (%)</label>
+                    <input type="number" id="input-nova-meta" class="login-input" style="font-weight:bold; font-size:18px; text-align:center; margin-bottom: 0; color: #15803d;" min="1" max="100" step="0.1" placeholder="Ex: 83.0">
+                </div>
+
+                <div style="border-top: 1px solid #e2e8f0; padding-top: 12px;">
+                    <label class="robo-label" style="margin-bottom: 8px;">📋 METAS CADASTRADAS NO SISTEMA</label>
+                    <div id="lista-metas-cadastradas" style="max-height: 170px; overflow-y: auto; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px; font-size: 12px;"></div>
+                </div>
+            </div>
+            <div style="padding: 15px 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: 10px; background: #f1f5f9;">
+                <button class="btn-footer-cancel" onclick="document.getElementById('modalMetaOnTime').classList.remove('show')">Fechar</button>
+                <button class="btn-footer-confirm" onclick="confirmarEdicaoMeta()">💾 Salvar Meta</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL GESTÃO DE EQUIPA -->
+    <div id="equipeModal" class="modal-overlay">
+        <div class="modal-content" style="width: 800px; max-width: 95%;">
+            <div class="modal-header">
+                👥 Gestão de Equipa e Permissões
+                <span style="cursor:pointer; opacity:0.8;" onclick="document.getElementById('equipeModal').classList.remove('show')">❌</span>
+            </div>
+            <div class="modal-equipa-body">
+                <div class="equipa-lista-container">
+                    <div class="equipa-lista-header">Utilizadores Cadastrados</div>
+                    <div id="lista-usuarios" class="equipa-lista-scroll"></div>
+                </div>
+                <div class="equipa-form-container">
+                    <h4 id="titulo-form-equipe" style="margin-top:0; color:#1a237e; border-bottom:2px solid #f1f5f9; padding-bottom:10px;">➕ Novo Utilizador</h4>
+                    <label class="robo-label">NOME DE UTILIZADOR (LOGIN)</label>
+                    <input type="text" id="eq-user" class="login-input" placeholder="Ex: joao.silva">
+                    <label class="robo-label">PALAVRA-PASSE</label>
+                    <input type="password" id="eq-pwd" class="login-input" placeholder="Nova senha (Vazio = Não alterar)">
+                    <label class="robo-label">CARGO E PERMISSÕES</label>
+                    <select id="eq-cargo" class="login-input" style="cursor: pointer;">
+                        <option value="GERENTE">👑 Gerente (Acesso Total)</option>
+                        <option value="COORDENADOR">👔 Coordenador (Edita Escalas e Tickets)</option>
+                        <option value="ANALISTA">📊 Analista (Opera apenas seu HUB)</option>
+                        <option value="MONITOR GRAU 2">🔎 Monitor Grau 2 (Visão de HUBs, Opera o seu)</option>
+                        <option value="MONITOR GRAU 1">🔎 Monitor Grau 1 (Somente Leitura)</option>
+                    </select>
+                    <label class="robo-label">HUBS ATRIBUÍDOS</label>
+                    <input type="text" id="eq-hubs" class="login-input" placeholder="Ex: TODOS ou BRXSP16, BRXSP10" style="text-transform: uppercase;" oninput="this.value = this.value.toUpperCase();">
+                    <button class="btn-salvar-robo" style="margin-bottom: 10px;" onclick="salvarUsuario()">💾 Salvar Informações</button>
+                    <button class="btn-footer-cancel" style="width: 100%; justify-content:center; text-align:center;" onclick="limparFormularioUsuario()">🔄 Limpar / Novo</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- O nosso ficheiro JavaScript -->
+    <script src="app.js"></script>
+</body>
+</html>
