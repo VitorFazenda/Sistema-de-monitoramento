@@ -745,7 +745,7 @@ def iniciar_orquestrador():
             limpar_travas_sessao()
             with sync_playwright() as p:
                 modo_str = "HEADLESS (Servidor)" if HEADLESS_MODE else "INTERFACE VISÍVEL (Local)"
-                log_painel(f"🤖 MOTOR V2.1 (NOVO LAYOUT MELI) INICIADO! Modo: {modo_str}")
+                log_painel(f"🤖 ROBÔ INICIADO (NOVA VERSÃO 2.1)! Modo: {modo_str}")
                 
                 navegador = p.chromium.launch_persistent_context(
                     user_data_dir=PASTA_SESSAO, 
