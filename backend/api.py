@@ -1,4 +1,5 @@
 import os
+import re
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
@@ -216,13 +217,48 @@ def puxar_rotas():
         try:
             with motor_db.begin() as conn:
                 conn.execute(text("UPDATE rotas_monitoramento SET nome_rota = 'AVULSA_ANTIGA' WHERE UPPER(nome_rota) LIKE '%NÃO PLANEJADA%' OR UPPER(nome_rota) LIKE '%NAO PLANEJADA%'"))
-        except: 
+        except Exception: 
             pass
         
-        df = pd.read_sql_table('rotas_monitoramento', con=motor_db)
+        df = pd.read_sql_table('rotas_monitoramento', con=motor_db).fillna("")
         if 'monitor' in df.columns:
-            df['monitor'] = df['monitor'].fillna("").astype(str).str.upper().str.strip()
-        return df.fillna("").to_dict(orient="records")
+            df['monitor'] = df['monitor'].astype(str).str.upper().str.strip()
+
+        alterou_banco = False
+        for idx, row in df.iterrows():
+            st_atual = str(row.get('status', '')).strip().upper()
+            try:
+                est_num = int(float(re.sub(r'[^\d.-]', '', str(row.get('estimado_total', '0'))) or 0))
+            except Exception:
+                est_num = 0
+            try:
+                col_num = int(float(re.sub(r'[^\d.-]', '', str(row.get('coletado_geral', '0'))) or 0))
+            except Exception:
+                col_num = 0
+
+            df.at[idx, 'restante'] = str(est_num - col_num)
+
+            novo_st = st_atual
+            if "SEM INÍCIO" in st_atual or "SEM INICIO" in st_atual:
+                novo_st = "PENDENTE DE LOGIN"
+            elif "ANDAMENTO" in st_atual or st_atual in ["INÍCIO", "INICIO"]:
+                novo_st = "LOGADO"
+            elif "CONCLU" in st_atual:
+                novo_st = "FINALIZADA" if col_num > 0 else "CANCELADA"
+            elif st_atual == "FINALIZADO":
+                novo_st = "FINALIZADA"
+
+            if novo_st != st_atual:
+                df.at[idx, 'status'] = novo_st
+                alterou_banco = True
+
+        if alterou_banco:
+            try:
+                df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
+            except Exception:
+                pass
+
+        return df.to_dict(orient="records")
     except Exception as e: 
         return {"erro": str(e)}
 
@@ -468,7 +504,14 @@ async def atualizar_stat(request: Request):
     try:
         df = pd.read_sql_table('rotas_monitoramento', con=motor_db)
         df['id_rota'] = df['id_rota'].astype(str)
-        df.loc[df['id_rota'] == str(dados.get("id_rota")), 'status'] = str(dados.get("status"))
+        if 'status_manual' not in df.columns:
+            df['status_manual'] = ""
+        id_alvo = str(dados.get("id_rota"))
+        novo_status = str(dados.get("status", "")).upper().strip()
+        if novo_status == "FINALIZADO":
+            novo_status = "FINALIZADA"
+        df.loc[df['id_rota'] == id_alvo, 'status'] = novo_status
+        df.loc[df['id_rota'] == id_alvo, 'status_manual'] = "SIM" if novo_status != "" else ""
         df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
         return {"sucesso": True}
     except Exception: 

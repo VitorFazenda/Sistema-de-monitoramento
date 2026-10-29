@@ -483,7 +483,10 @@ class ExcelFloatingFilter {
         this.inp.placeholder = 'Pesquisar...'; this.eGui.appendChild(this.inp);
         this.inp.addEventListener('input', (e) => { this.p.parentFilterInstance(i => { i.setSearchText(e.target.value); }); });
     }
-    getGui() { return this.eGui; } onParentModelChanged() { }
+    getGui() { return this.eGui; }
+    onParentModelChanged(parentModel) {
+        if (!parentModel && this.inp) this.inp.value = '';
+    }
 }
 
 class ExcelStyleFilter {
@@ -509,17 +512,25 @@ class ExcelStyleFilter {
             let cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = this.sVals.has(v); cb.value = v;
             cb.addEventListener('change', (e) => { e.target.checked ? this.sVals.add(v) : this.sVals.delete(v); this.p.filterChangedCallback(); });
             this.cbs.push({cb: cb, val: v}); l.appendChild(cb); l.appendChild(document.createTextNode(v === "" ? "(Vazio)" : v));
-            if (ts === "" || v.toLowerCase().includes(ts)) this.lCont.appendChild(l);
+            if (ts === "" || String(v).toLowerCase().includes(ts)) this.lCont.appendChild(l);
         });
     }
     setSearchText(t) {
         this.lastSearchText = t.toLowerCase().trim(); this.renderCheckboxes(); this.sVals.clear();
-        this.cbs.forEach(i => { if (this.lastSearchText === "" || i.val.toLowerCase().includes(this.lastSearchText)) { i.cb.checked = true; this.sVals.add(i.val); } else i.cb.checked = false; });
+        this.cbs.forEach(i => { if (this.lastSearchText === "" || String(i.val).toLowerCase().includes(this.lastSearchText)) { i.cb.checked = true; this.sVals.add(i.val); } else i.cb.checked = false; });
         this.p.filterChangedCallback();
     }
     getGui() { return this.eGui; } doesFilterPass(p) { return this.sVals.has(p.data[this.p.colDef.field] || ""); }
     isFilterActive() { return this.sVals.size < this.vArr.length; } getModel() { return this.isFilterActive() ? { values: Array.from(this.sVals) } : null; }
-    setModel(m) { if (m && m.values) this.sVals = new Set(m.values); else this.sVals = new Set(this.vArr); this.renderCheckboxes(); }
+    setModel(m) {
+        if (m && m.values) {
+            this.sVals = new Set(m.values);
+        } else {
+            this.lastSearchText = "";
+            this.sVals = new Set(this.vArr);
+        }
+        this.renderCheckboxes();
+    }
     destroy() { if(this.onRowDataUpdated) this.p.api.removeEventListener('rowDataUpdated', this.onRowDataUpdated); }
 }
 
@@ -592,8 +603,7 @@ const columnDefs = [
     { field: "horario", headerName: "HORÁRIO", width: 110, editable: false, filter: 'agTextColumnFilter', floatingFilter: true },
     { field: "motorista", headerName: "MOTORISTA", width: 260, editable: false, filter: 'agTextColumnFilter', floatingFilter: true },
     { field: "placa", headerName: "PLACA", width: 110, editable: false, filter: 'agTextColumnFilter', floatingFilter: true },
-    { field: "status", headerName: "STATUS", width: 160, editable: p => podeEditarLinha(p.data), cellEditor: StatusEditor, filter: ExcelStyleFilter, cellStyle: p => { const cI = p.column.getId(); if (p.data && p.data.coresIndividuais && p.data.coresIndividuais[cI]) return { backgroundColor: p.data.coresIndividuais[cI], color: getTextColorForBackground(p.data.coresIndividuais[cI]), fontWeight: 'bold' }; let v = p.value ? p.value.toUpperCase() : ''; let b = { fontWeight: 'bold', color: 'white', textAlign: 'center' }; if (v === 'CANCELADA') return { ...b, backgroundColor: '#d32f2f' }; if (v === 'DECLÍNIO') return { ...b, backgroundColor: '#800020' }; if (v === 'PENDENTE DE LOGIN') return { ...b, backgroundColor: '#ffeb3b', color: 'black' }; if (v === 'LOGADO') return { ...b, backgroundColor: '#2e7d32' }; if (v === 'COLETANDO') return { ...b, backgroundColor: '#90ee90', color: 'black' }; if (v === 'FINALIZADA') return { ...b, backgroundColor: '#004d40' }; return null; } },
-    { field: "estimado_total", headerName: "ESTIMADO TOTAL", width: 140, editable: p => podeEditarLinha(p.data), filter: 'agTextColumnFilter', floatingFilter: true, valueParser: p => p.newValue ? p.newValue.replace(/\D/g, '') : '' },
+    { field: "status", headerName: "STATUS", width: 160, editable: p => podeEditarLinha(p.data), cellEditor: StatusEditor, filter: ExcelStyleFilter, cellStyle: p => { const cI = p.column.getId(); if (p.data && p.data.coresIndividuais && p.data.coresIndividuais[cI]) return { backgroundColor: p.data.coresIndividuais[cI], color: getTextColorForBackground(p.data.coresIndividuais[cI]), fontWeight: 'bold' }; let v = p.value ? p.value.toUpperCase().trim() : ''; let b = { fontWeight: 'bold', color: 'white', textAlign: 'center' }; if (v === 'CANCELADA' || v === 'CANCELADO') return { ...b, backgroundColor: '#d32f2f' }; if (v === 'DECLÍNIO' || v === 'DECLINIO') return { ...b, backgroundColor: '#800020' }; if (v === 'PENDENTE DE LOGIN') return { ...b, backgroundColor: '#ffeb3b', color: 'black' }; if (v === 'LOGADO') return { ...b, backgroundColor: '#2e7d32' }; if (v === 'COLETANDO') return { ...b, backgroundColor: '#90ee90', color: 'black' }; if (v === 'FINALIZADA' || v === 'FINALIZADO') return { ...b, backgroundColor: '#004d40' }; return null; } },    { field: "estimado_total", headerName: "ESTIMADO TOTAL", width: 140, editable: p => podeEditarLinha(p.data), filter: 'agTextColumnFilter', floatingFilter: true, valueParser: p => p.newValue ? p.newValue.replace(/\D/g, '') : '' },
     { field: "coletado_geral", headerName: "COLETADOS", width: 120, editable: p => podeEditarLinha(p.data), filter: 'agTextColumnFilter', floatingFilter: true, valueParser: p => p.newValue ? p.newValue.replace(/\D/g, '') : '' },
     { field: "restante", headerName: "RESTANTES", width: 120, editable: false, filter: 'agTextColumnFilter', floatingFilter: true, valueGetter: p => { return (parseFloat(p.data.estimado_total) || 0) - (parseFloat(p.data.coletado_geral) || 0); } },
     { field: "revertido", headerName: "REVERTIDO?", width: 120, editable: p => podeEditarLinha(p.data), cellEditor: RevertidoEditor, filter: ExcelStyleFilter, cellStyle: p => { const cI = p.column.getId(); if (p.data && p.data.coresIndividuais && p.data.coresIndividuais[cI]) return { backgroundColor: p.data.coresIndividuais[cI], color: getTextColorForBackground(p.data.coresIndividuais[cI]), fontWeight: 'bold' }; let v = p.value ? p.value.toUpperCase() : ''; let b = { fontWeight: 'bold', color: 'white', textAlign: 'center' }; if (v === 'SIM') return { ...b, backgroundColor: '#2e7d32' }; if (v === 'NÃO') return { ...b, backgroundColor: '#d32f2f' }; return null; } },
@@ -664,9 +674,33 @@ function popularDropdownsDataBI(datas) {
 }
 
 function aplicarFiltroHubPlanilha() {
-    if (!gridApi) return; const hS = document.getElementById('filtro-hub-planilha').value;
-    let dF = rotasGlobais; if (hS !== "TODOS") dF = rotasGlobais.filter(r => r.nome_rota && r.nome_rota.toUpperCase().startsWith(hS));
-    gridApi.setGridOption('rowData', ordenarRotasPorSequencia(dF)); setTimeout(atualizarContadorRotas, 100); 
+    if (!gridApi) return;
+    const hS = document.getElementById('filtro-hub-planilha').value;
+    let dF = rotasGlobais;
+    if (hS !== "TODOS") dF = rotasGlobais.filter(r => r.nome_rota && r.nome_rota.toUpperCase().startsWith(hS));
+    gridApi.setGridOption('rowData', ordenarRotasPorSequencia(dF));
+    setTimeout(atualizarContadorRotas, 100); 
+}
+
+function limparFiltrosPlanilha() {
+    const selHub = document.getElementById('filtro-hub-planilha');
+    if (selHub) selHub.value = "TODOS";
+
+    if (gridApi) {
+        gridApi.setFilterModel(null);
+        ['data', 'monitor', 'cluster', 'status', 'revertido'].forEach(col => {
+            gridApi.getColumnFilterInstance(col).then(inst => {
+                if (inst && typeof inst.setModel === 'function') {
+                    inst.setModel(null);
+                }
+            }).catch(() => {});
+        });
+        document.querySelectorAll('#myGrid input[placeholder="Pesquisar..."], #myGrid .ag-floating-filter-input').forEach(inp => {
+            inp.value = '';
+        });
+        gridApi.onFilterChanged();
+    }
+    aplicarFiltroHubPlanilha();
 }
 
 function filtrarBaseRelatorio(dId, hId, iniId, fimId, contId) {

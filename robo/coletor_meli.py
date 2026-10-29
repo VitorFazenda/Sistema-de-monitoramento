@@ -283,8 +283,19 @@ def garantir_login(page, forcar_recarregamento=False):
         log_painel("⚠️ Não foi possível confirmar o redirecionamento final.")
         return False
 
+def traduzir_status_meli(status_bruto: str, coletados_int: int) -> str:
+    """Converte os status do Mercado Livre para o padrão oficial da planilha JM"""
+    st = str(status_bruto or "").strip().upper()
+    if "SEM INÍCIO" in st or "SEM INICIO" in st or st == "PENDENTE DE LOGIN":
+        return "PENDENTE DE LOGIN"
+    if "ANDAMENTO" in st or "INÍCIO" in st or "INICIO" in st or st == "LOGADO":
+        return "LOGADO"
+    if "CONCLU" in st or st in ["FINALIZADA", "FINALIZADO", "CANCELADA"]:
+        return "FINALIZADA" if coletados_int > 0 else "CANCELADA"
+    return st if st else "PENDENTE DE LOGIN"
+
 # ==========================================
-# MÓDULO 1: RASPAGEM DE MONITORAMENTO (NOVO LAYOUT MELI ANDES UI)
+# MÓDULO 1: RASPAGEM DE MONITORAMENTO (COM STATUS JM E PACOTES CORRIGIDOS)
 # ==========================================
 def executar_raspagem(page, hub_alvo):
     for tentativa in range(2):
@@ -304,11 +315,9 @@ def executar_raspagem(page, hub_alvo):
                 time.sleep(4)
 
             if hub_alvo != "TODOS":
-                # 1. Localiza o botão do filtro de Depósito (Inspeção 1)
                 combo_deposito = page.locator('button.compact-selector__trigger[aria-label="Depósito"], button[role="combobox"][aria-label="Depósito"]').first
                 combo_deposito.wait_for(state="visible", timeout=15000)
 
-                # Verifica quais tags já estão selecionadas dentro do botão Depósito
                 tags_atuais = [t.strip().upper() for t in combo_deposito.locator('.andes-tag__label').all_inner_texts()]
                 
                 if tags_atuais == [hub_alvo.upper()]:
@@ -323,7 +332,6 @@ def executar_raspagem(page, hub_alvo):
                         combo_deposito.click()
                         time.sleep(1.5)
 
-                    # Desmarca outros depósitos caso algum tenha vindo pré-selecionado
                     selecionados = page.locator('li[role="option"][aria-selected="true"]').all()
                     for item_sel in selecionados:
                         chave_sel = (item_sel.get_attribute("data-key") or "").strip().upper()
@@ -331,21 +339,18 @@ def executar_raspagem(page, hub_alvo):
                             item_sel.click()
                             time.sleep(0.4)
 
-                    # 2. Campo Buscar dentro do dropdown (Inspeção 2)
                     campo_busca = page.locator('input.andes-form-control__field[data-andes-searchbox-input="true"], input[placeholder="Buscar"]').first
                     campo_busca.wait_for(state="visible", timeout=10000)
                     campo_busca.fill("")
                     campo_busca.fill(hub_alvo)
                     time.sleep(1.5)
 
-                    # 3. Localiza o item na lista pelo data-key ou role="option" (Inspeção 3)
                     opcao_hub = page.locator(f'li[role="option"][data-key="{hub_alvo}"], li[role="option"]:has-text("{hub_alvo}")').first
                     if opcao_hub.count() == 0 or not opcao_hub.is_visible():
                         log_painel(f"❌ ERRO: O depósito '{hub_alvo}' não existe na lista do Mercado Livre! Verifique a digitação.")
                         page.keyboard.press("Escape")
                         return "HUB_INVALIDO"
 
-                    # Só clica se ainda não estiver marcado
                     ja_marcado = opcao_hub.get_attribute("aria-selected") == "true"
                     if not ja_marcado:
                         chk_input = opcao_hub.locator('input.andes-checkbox__input, input[type="checkbox"]').first
@@ -355,7 +360,6 @@ def executar_raspagem(page, hub_alvo):
                             opcao_hub.click()
                         time.sleep(1)
 
-                    # 4. Clica no botão Aplicar (Inspeção 4)
                     btn_aplicar = page.locator('.compact-selector__footer button:has-text("Aplicar"), button:has(span[data-andes-button-content="true"]:has-text("Aplicar"))').first
                     if btn_aplicar.count() > 0 and btn_aplicar.is_visible() and not btn_aplicar.is_disabled():
                         btn_aplicar.click()
@@ -370,7 +374,6 @@ def executar_raspagem(page, hub_alvo):
                     time.sleep(3)
                 log_painel("🌎 Raspando TODAS as rotas disponíveis no sistema (Sem Filtro de HUB).")
 
-            # 5. Leitura dos Cards de Rotas (Inspeção 5 - div.monitoring-row-higher)
             dados_raspados = []
             pagina_atual = 1
             seletor_cards = "div.monitoring-row-higher, .monitoring-row"
@@ -383,6 +386,8 @@ def executar_raspagem(page, hub_alvo):
                         linhas_rotas = page.locator(".monitoring-row").all()
 
                     for linha in linhas_rotas:
+                        texto_card_completo = linha.text_content() or ""
+
                         nome_el = linha.locator("p.monitoring-row-higher-details__text.bold").first
                         nome_bruto = (nome_el.text_content() or "") if nome_el.count() > 0 else ""
                         nome_rota = nome_bruto.replace("Rota ", "").strip()
@@ -413,22 +418,21 @@ def executar_raspagem(page, hub_alvo):
                         horario_el = linha.locator(".monitoring-row-higher-details.eta p, div[data-testid='active-route-eta'] p").first
                         horario = (horario_el.text_content() or "").strip() if horario_el.count() > 0 else "Sem Horário"
 
+                        # Extração direta e segura de Pacotes Coletados, Estimados e Restantes via Regex
+                        match_col = re.search(r'(\d[\d\.]*)\s*(?:pacotes\s*)?coletados', texto_card_completo, re.IGNORECASE)
+                        coletados = re.sub(r'\D', '', match_col.group(1)) if match_col else "0"
+
+                        match_est = re.search(r'(\d[\d\.]*)\s*(?:pacotes\s*)?estimados', texto_card_completo, re.IGNORECASE)
+                        estimados = re.sub(r'\D', '', match_est.group(1)) if match_est else "0"
+
+                        int_est = int(estimados) if estimados.isdigit() else 0
+                        int_col = int(coletados) if coletados.isdigit() else 0
+                        restante = str(int_est - int_col)
+
+                        # Status do Meli traduzido para as regras da planilha JM
                         status_el = linha.locator(".status-main p.bold, .monitoring-row-higher-details.status p.bold").first
-                        status = (status_el.text_content() or "").strip() if status_el.count() > 0 else "Desconhecido"
-
-                        try:
-                            col_el = linha.locator(".monitoring-row-higher-details.packages p.bold, text=coletados").first
-                            texto_coletados = col_el.text_content() or "0"
-                            coletados = re.sub(r'[^0-9]', '', texto_coletados.split('coletados')[0]) or "0"
-                        except Exception:
-                            coletados = "0"
-
-                        try:
-                            est_el = linha.locator(".monitoring-row-higher-details.packages p:has-text('estimados'), text=estimados").first
-                            texto_estimados = est_el.text_content() or "0"
-                            estimados = re.sub(r'[^0-9]', '', texto_estimados.split('estimados')[0]) or "0"
-                        except Exception:
-                            estimados = "0"
+                        status_meli_bruto = (status_el.text_content() or "").strip() if status_el.count() > 0 else "Sem início"
+                        status_traduzido = traduzir_status_meli(status_meli_bruto, int_col)
 
                         match_cluster = re.search(r'_(C\d+)_', nome_rota)
                         cluster = match_cluster.group(1) if match_cluster else "Sem Cluster"
@@ -440,9 +444,10 @@ def executar_raspagem(page, hub_alvo):
                             "horario": horario,
                             "motorista": motorista,
                             "placa": placa,
-                            "status": status,
-                            "estimado_total": estimados,
-                            "coletado_geral": coletados, 
+                            "status": status_traduzido,
+                            "estimado_total": str(int_est),
+                            "coletado_geral": str(int_col),
+                            "restante": restante,
                             "data": pd.Timestamp.now().strftime('%d/%m/%Y')
                         })
                 except Exception:
@@ -460,15 +465,16 @@ def executar_raspagem(page, hub_alvo):
                 break
                     
             if dados_raspados:
-                log_painel(f"📦 {hub_alvo}: {len(dados_raspados)} rota(s) capturada(s)! Salvando no banco...")
+                log_painel(f"📦 {hub_alvo}: {len(dados_raspados)} rota(s) capturada(s)! Atualizando planilha...")
                 df_novo = pd.DataFrame(dados_raspados)
                 try:
                     insp = inspect(motor_db)
                     
                     if insp.has_table('rotas_monitoramento'):
                         df_antigo = pd.read_sql_table('rotas_monitoramento', con=motor_db)
-                        if 'monitor' not in df_antigo.columns:
-                            df_antigo['monitor'] = ""
+                        for col_extra in ['monitor', 'status_manual', 'restante', 'revertido', 'observacoes', 'cores_customizadas']:
+                            if col_extra not in df_antigo.columns:
+                                df_antigo[col_extra] = ""
                         
                         df_antigo['id_rota'] = df_antigo['id_rota'].astype(str)
                         df_novo['id_rota'] = df_novo['id_rota'].astype(str)
@@ -493,26 +499,35 @@ def executar_raspagem(page, hub_alvo):
                         
                         indices_comuns = df_antigo_hoje.index.intersection(df_novo.index)
                         for idx in indices_comuns:
+                            # 1. Preserva horário planejado se o novo vier como ATA/ETA
                             h_antigo = str(df_antigo_hoje.at[idx, 'horario']).upper().strip()
                             h_novo = str(df_novo.at[idx, 'horario']).upper().strip()
-                            
-                            is_antigo_bom = (h_antigo != "SEM HORÁRIO" and h_antigo != "NAN" and h_antigo != "" and "ATA" not in h_antigo and "ETA" not in h_antigo)
-                            is_novo_ruim = ("ATA" in h_novo or "ETA" in h_novo or h_novo == "SEM HORÁRIO" or h_novo == "")
-                            
+                            is_antigo_bom = (h_antigo not in ["SEM HORÁRIO", "NAN", ""] and "ATA" not in h_antigo and "ETA" not in h_antigo)
+                            is_novo_ruim = ("ATA" in h_novo or "ETA" in h_novo or h_novo in ["SEM HORÁRIO", ""])
                             if is_antigo_bom and is_novo_ruim:
                                 df_novo.at[idx, 'horario'] = df_antigo_hoje.at[idx, 'horario']
 
+                            # 2. Preserva Cluster preenchido manualmente
                             c_antigo = str(df_antigo_hoje.at[idx, 'cluster']).strip()
                             c_novo = str(df_novo.at[idx, 'cluster']).strip()
                             if c_antigo and c_antigo.upper() != "SEM CLUSTER" and c_novo.upper() == "SEM CLUSTER":
                                 df_novo.at[idx, 'cluster'] = c_antigo
 
+                            # 3. Preserva Placa se o card estava fechado
                             p_antiga = str(df_antigo_hoje.at[idx, 'placa']).strip()
                             p_nova = str(df_novo.at[idx, 'placa']).strip()
                             if p_antiga and p_antiga.upper() != "NAN" and not p_nova:
                                 df_novo.at[idx, 'placa'] = p_antiga
 
-                        colunas_atualizar = ['nome_rota', 'cluster', 'status', 'horario', 'motorista', 'placa', 'estimado_total', 'coletado_geral']
+                            # 4. NÃO SUBSTITUI STATUS ESCRITO MANUALMENTE PELO USUÁRIO
+                            st_antigo = str(df_antigo_hoje.at[idx, 'status'] or '').upper().strip()
+                            foi_manual = str(df_antigo_hoje.at[idx, 'status_manual'] or '').upper().strip() == "SIM"
+                            status_exclusivo_manual = st_antigo in ["DECLÍNIO", "DECLINIO", "COLETANDO"]
+
+                            if foi_manual or status_exclusivo_manual:
+                                df_novo.at[idx, 'status'] = st_antigo
+
+                        colunas_atualizar = ['nome_rota', 'cluster', 'status', 'horario', 'motorista', 'placa', 'estimado_total', 'coletado_geral', 'restante']
                         col_presentes = [col for col in colunas_atualizar if col in df_antigo_hoje.columns and col in df_novo.columns]
                         
                         df_antigo_hoje.update(df_novo[col_presentes])
@@ -526,6 +541,7 @@ def executar_raspagem(page, hub_alvo):
                                 c_n = str(r_nova.get('cluster', '') or '').upper().strip()
                                 monitores_novas.append(mapa_monitores.get((h_n, c_n), ""))
                             rotas_novas['monitor'] = monitores_novas
+                            rotas_novas['status_manual'] = ""
 
                         df_antigo_hoje.reset_index(inplace=True)
                         rotas_novas.reset_index(inplace=True)
@@ -534,6 +550,7 @@ def executar_raspagem(page, hub_alvo):
                         df_final.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
                     else:
                         df_novo['monitor'] = ""
+                        df_novo['status_manual'] = ""
                         df_novo.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
                         
                 except Exception as e:
@@ -745,7 +762,7 @@ def iniciar_orquestrador():
             limpar_travas_sessao()
             with sync_playwright() as p:
                 modo_str = "HEADLESS (Servidor)" if HEADLESS_MODE else "INTERFACE VISÍVEL (Local)"
-                log_painel(f"🤖 ROBÔ INICIADO (NOVA VERSÃO 2.1)! Modo: {modo_str}")
+                log_painel(f"🤖 ROBÔ INICIADO (VERSÃO 2.2 - STATUS & PACOTES)! Modo: {modo_str}")
                 
                 navegador = p.chromium.launch_persistent_context(
                     user_data_dir=PASTA_SESSAO, 
