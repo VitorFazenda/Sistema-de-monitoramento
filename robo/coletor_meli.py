@@ -313,10 +313,24 @@ def traduzir_status_meli(status_bruto: str, coletados_int: int) -> str:
     return st if st else "PENDENTE DE LOGIN"
 
 # ==========================================
-# MÓDULO 1: RASPAGEM DE MONITORAMENTO (SEMPRE LIMPAR TODOS OS FILTROS PRIMEIRO)
+# MÓDULO 1: RASPAGEM DE MONITORAMENTO 
 # ==========================================
+def aguardar_carregamento_meli(page, tempo_max=12):
+    """Aguarda os spinners do Mercado Livre sumirem após limpar ou aplicar filtros"""
+    time.sleep(1.5)
+    fim = time.time() + tempo_max
+    while time.time() < fim:
+        try:
+            spinners = page.locator('.andes-spinner:visible, [aria-busy="true"]:visible').count()
+            if spinners == 0:
+                break
+        except Exception:
+            break
+        time.sleep(0.6)
+    time.sleep(1.5)
+
 def clicar_limpar_todos_filtros(page):
-    """Clica sempre no botão 'Limpar todos' do Mercado Livre antes de qualquer raspagem"""
+    """Clica sempre no botão 'Limpar todos' do Mercado Livre e aguarda a tela estabilizar"""
     seletores_limpar = [
         'button.button-link__button:has(span:has-text("Limpar todos"))',
         'span.andes-typography:has-text("Limpar todos")',
@@ -328,7 +342,7 @@ def clicar_limpar_todos_filtros(page):
             if btn.count() > 0 and btn.is_visible():
                 log_painel("🧹 Limpando todos os filtros da tela do Mercado Livre...")
                 btn.click(timeout=8000)
-                time.sleep(3)
+                aguardar_carregamento_meli(page, tempo_max=10)
                 return True
         except Exception:
             pass
@@ -345,7 +359,7 @@ def executar_raspagem(page, hub_alvo):
                     wait_until="domcontentloaded",
                     timeout=60000
                 )
-                time.sleep(5)
+                aguardar_carregamento_meli(page, tempo_max=12)
             else:
                 time.sleep(2)
             
@@ -357,9 +371,9 @@ def executar_raspagem(page, hub_alvo):
                     wait_until="domcontentloaded",
                     timeout=60000
                 )
-                time.sleep(5)
+                aguardar_carregamento_meli(page, tempo_max=12)
 
-            # REGRA OBRIGATÓRIA: Sempre limpa todos os filtros primeiro (tanto para HUB específico quanto para TODOS)
+            # 1. Sempre limpa todos os filtros antes de começar
             clicar_limpar_todos_filtros(page)
 
             if hub_alvo != "TODOS":
@@ -367,6 +381,7 @@ def executar_raspagem(page, hub_alvo):
                 combo_deposito = page.locator('button.compact-selector__trigger[aria-label="Depósito"], button[role="combobox"][aria-label="Depósito"]').first
                 combo_deposito.wait_for(state="visible", timeout=20000)
 
+                # Abre o menu Depósito
                 if combo_deposito.get_attribute("aria-expanded") != "true":
                     combo_deposito.click(timeout=10000)
                     time.sleep(1.5)
@@ -374,6 +389,7 @@ def executar_raspagem(page, hub_alvo):
                 campo_busca = page.locator('input.andes-form-control__field[data-andes-searchbox-input="true"], input[placeholder="Buscar"]').first
                 campo_busca.wait_for(state="visible", timeout=10000)
                 campo_busca.fill("")
+                time.sleep(0.3)
                 campo_busca.fill(hub_alvo)
                 time.sleep(1.5)
 
@@ -383,32 +399,43 @@ def executar_raspagem(page, hub_alvo):
                     page.keyboard.press("Escape")
                     return "HUB_INVALIDO"
 
+                # Clica diretamente no item da lista (li[role="option"]) e garante que ficou aria-selected="true"
                 if opcao_hub.get_attribute("aria-selected") != "true":
-                    chk_input = opcao_hub.locator('input.andes-checkbox__input, input[type="checkbox"]').first
-                    if chk_input.count() > 0:
-                        chk_input.click(force=True)
-                    else:
-                        opcao_hub.click(timeout=5000)
-                    time.sleep(1)
+                    opcao_hub.click(timeout=5000)
+                    time.sleep(0.8)
+                    if opcao_hub.get_attribute("aria-selected") != "true":
+                        chk_box = opcao_hub.locator('.andes-checkbox__checkbox, input[type="checkbox"]').first
+                        if chk_box.count() > 0:
+                            chk_box.click(force=True)
+                            time.sleep(0.8)
 
+                # Clica no botão Aplicar e aguarda o Mercado Livre carregar as rotas do HUB
                 btn_aplicar = page.locator('.compact-selector__footer button:has-text("Aplicar"), button:has(span[data-andes-button-content="true"]:has-text("Aplicar"))').first
                 if btn_aplicar.count() > 0 and btn_aplicar.is_visible() and not btn_aplicar.is_disabled():
                     btn_aplicar.click(timeout=8000)
-                    time.sleep(4)
+                    aguardar_carregamento_meli(page, tempo_max=15)
                 else:
                     page.keyboard.press("Escape")
                     time.sleep(2)
+
+                # Valida se a tag do HUB realmente apareceu dentro do botão Depósito
+                tags_aplicadas = [t.strip().upper() for t in combo_deposito.locator('.andes-tag__label').all_inner_texts()]
+                if hub_alvo.upper() not in tags_aplicadas:
+                    log_painel(f"⚠️ Filtro {hub_alvo} não fixou na 1ª tentativa (tags atuais: {tags_aplicadas}). Repetindo seleção...")
+                    if tentativa == 0:
+                        continue
             else:
                 log_painel("🌎 Filtros limpos! Raspando TODAS as rotas disponíveis no sistema.")
 
-            # Leitura da div.list > div.monitoring-row (pega card superior e inferior juntos)
+            # Leitura da div.list > div.monitoring-row com espera estendida de até 20s
             dados_raspados = []
             pagina_atual = 1
             seletor_cards = "div.list div.monitoring-row, div.monitoring-row, div.monitoring-row-higher"
             
             while True:
                 try:
-                    page.wait_for_selector(seletor_cards, timeout=10000)
+                    page.wait_for_selector(seletor_cards, timeout=20000)
+                    time.sleep(1.0)
                     linhas_rotas = page.locator("div.list > div.monitoring-row").all()
                     if not linhas_rotas:
                         linhas_rotas = page.locator("div.monitoring-row").all()
@@ -435,7 +462,6 @@ def executar_raspagem(page, hub_alvo):
                         mot_el = linha.locator('[data-testid="carrier-or-driver-name"]').first
                         motorista = (mot_el.text_content() or "").strip() if mot_el.count() > 0 else ""
 
-                        # Placa extraída diretamente da div.monitoring-row-lower-details.vehicle p (mesmo oculta)
                         placa = ""
                         try:
                             placa_el = linha.locator(".monitoring-row-lower-details.vehicle p").first
@@ -487,7 +513,7 @@ def executar_raspagem(page, hub_alvo):
                     classes_pai = (parent_li.get_attribute("class") or "").lower()
                     if "disabled" not in classes_pai and not botao_proximo.is_disabled():
                         botao_proximo.click(timeout=8000)
-                        time.sleep(3)
+                        aguardar_carregamento_meli(page, tempo_max=10)
                         pagina_atual += 1
                         continue
                 break
@@ -584,7 +610,11 @@ def executar_raspagem(page, hub_alvo):
                 
                 return True
             else:
-                log_painel(f"ℹ️ {hub_alvo}: Nenhuma rota encontrada na tela neste momento (0 rotas).")
+                # Se veio 0 rotas na Tentativa 1, faz uma releitura completa na Tentativa 2 para garantir que a página não estava apenas carregando!
+                if tentativa == 0:
+                    log_painel(f"⏳ {hub_alvo}: 0 rotas lidas na 1ª verificação. Realizando confirmação de segurança...")
+                    continue
+                log_painel(f"ℹ️ {hub_alvo}: Nenhuma rota encontrada na tela após confirmação (0 rotas).")
                 return True
 
         except Exception as e:

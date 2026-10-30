@@ -37,11 +37,16 @@ let GO_DATA = {
 };
 
 // ==========================================
-// CONTROLE DE TELA DE CARREGAMENTO (SPINNER)
+// CONTROLE DE TELA DE CARREGAMENTO
 // ==========================================
 let contadorRequisicoesLoading = 0;
+let rotasJaCarregadas = false;
+let relatoriosJaCarregados = false;
+let carregandoRotasAgora = false;
+let carregandoRelatoriosAgora = false;
+let timerToastRobo = null;
 
-function mostrarLoading(mensagem = "Carregando informações...") {
+function mostrarLoading(mensagem = "Abrindo tela...") {
     contadorRequisicoesLoading++;
     const overlay = document.getElementById('loading-overlay');
     const txt = document.getElementById('loading-text');
@@ -55,6 +60,48 @@ function esconderLoading() {
         const overlay = document.getElementById('loading-overlay');
         if (overlay) overlay.classList.remove('show');
     }
+}
+
+function mostrarToastRobo(mensagem = "Informações atualizadas pelo robô!") {
+    const toast = document.getElementById('toast-robo');
+    const msgEl = document.getElementById('toast-robo-msg');
+    if (!toast) return;
+    if (msgEl) msgEl.innerText = mensagem;
+    toast.classList.add('show');
+    if (timerToastRobo) clearTimeout(timerToastRobo);
+    timerToastRobo = setTimeout(() => {
+        toast.classList.remove('show');
+    }, 3000);
+}
+
+// Comparadores para ordenação perfeita de menor para maior e maior para menor
+function comparadorNumerico(a, b) {
+    const strA = String(a ?? '').replace(/[^\d.-]/g, '');
+    const strB = String(b ?? '').replace(/[^\d.-]/g, '');
+    const numA = strA !== '' ? parseFloat(strA) : NaN;
+    const numB = strB !== '' ? parseFloat(strB) : NaN;
+    const valA = !isNaN(numA);
+    const valB = !isNaN(numB);
+    if (valA && valB) return numA - numB;
+    if (valA) return -1;
+    if (valB) return 1;
+    return String(a ?? '').localeCompare(String(b ?? ''), 'pt-BR', { numeric: true });
+}
+
+function comparadorTextoNatural(a, b) {
+    return String(a ?? '').localeCompare(String(b ?? ''), 'pt-BR', { numeric: true, sensitivity: 'base' });
+}
+
+function comparadorDataBR(a, b) {
+    const paraNumero = (s) => {
+        const p = String(s || '').trim().split(/[/ -]/);
+        if (p.length >= 3) {
+            if (p[0].length === 4) return parseInt(`${p[0]}${p[1].padStart(2, '0')}${p[2].padStart(2, '0')}`);
+            return parseInt(`${p[2]}${p[1].padStart(2, '0')}${p[0].padStart(2, '0')}`);
+        }
+        return 0;
+    };
+    return paraNumero(a) - paraNumero(b);
 }
 
 // ==========================================
@@ -800,25 +847,25 @@ function restaurarEstadoColunas() {
 function atualizarContadorRotas() { if (gridApi && document.getElementById('total-rotas-planilha')) document.getElementById('total-rotas-planilha').innerText = gridApi.getDisplayedRowCount(); }
 
 const columnDefs = [
-    { field: "data", headerName: "DATA", width: 120, editable: false, filter: ExcelStyleFilter },
-    { field: "monitor", headerName: "MONITOR", width: 130, editable: false, filter: ExcelStyleFilter, floatingFilter: true, floatingFilterComponent: ExcelFloatingFilter },
-    { field: "cluster", headerName: "CLUSTER", width: 150, filter: ExcelStyleFilter, floatingFilter: true, floatingFilterComponent: ExcelFloatingFilter, editable: p => podeEditarLinha(p.data) && isRotaAvulsaOuSemCluster(p.data), valueParser: p => { let v = String(p.newValue || "").toUpperCase().trim(); return v === "" ? "Sem Cluster" : v; }, cellStyle: p => { if (isRotaAvulsaOuSemCluster(p.data) && (!p.value || String(p.value).toUpperCase() === 'SEM CLUSTER')) return { backgroundColor: '#fff3cd', color: '#856404', fontWeight: 'bold', border: '1px dashed #ffc107' }; return null; } },
-    { field: "id_rota", headerName: "ID DE ROTA", width: 130, editable: false, filter: 'agTextColumnFilter', floatingFilter: true },
-    { field: "nome_rota", headerName: "NOME DA ROTA", width: 190, editable: false, filter: 'agTextColumnFilter', floatingFilter: true },
-    { field: "horario", headerName: "HORÁRIO", width: 110, editable: false, filter: 'agTextColumnFilter', floatingFilter: true },
-    { field: "motorista", headerName: "MOTORISTA", width: 260, editable: false, filter: 'agTextColumnFilter', floatingFilter: true },
-    { field: "placa", headerName: "PLACA", width: 110, editable: false, filter: 'agTextColumnFilter', floatingFilter: true },
-    { field: "status", headerName: "STATUS", width: 160, editable: p => podeEditarLinha(p.data), cellEditor: StatusEditor, filter: ExcelStyleFilter, cellStyle: p => { const cI = p.column.getId(); if (p.data && p.data.coresIndividuais && p.data.coresIndividuais[cI]) return { backgroundColor: p.data.coresIndividuais[cI], color: getTextColorForBackground(p.data.coresIndividuais[cI]), fontWeight: 'bold' }; let v = p.value ? p.value.toUpperCase().trim() : ''; let b = { fontWeight: 'bold', color: 'white', textAlign: 'center' }; if (v === 'CANCELADA' || v === 'CANCELADO') return { ...b, backgroundColor: '#d32f2f' }; if (v === 'DECLÍNIO' || v === 'DECLINIO') return { ...b, backgroundColor: '#800020' }; if (v === 'PENDENTE DE LOGIN') return { ...b, backgroundColor: '#ffeb3b', color: 'black' }; if (v === 'LOGADO') return { ...b, backgroundColor: '#2e7d32' }; if (v === 'COLETANDO') return { ...b, backgroundColor: '#90ee90', color: 'black' }; if (v === 'FINALIZADA' || v === 'FINALIZADO') return { ...b, backgroundColor: '#004d40' }; return null; } },
-    { field: "estimado_total", headerName: "ESTIMADO TOTAL", width: 140, editable: p => podeEditarLinha(p.data), filter: 'agTextColumnFilter', floatingFilter: true, valueParser: p => p.newValue ? p.newValue.replace(/\D/g, '') : '' },
-    { field: "coletado_geral", headerName: "COLETADOS", width: 120, editable: p => podeEditarLinha(p.data), filter: 'agTextColumnFilter', floatingFilter: true, valueParser: p => p.newValue ? p.newValue.replace(/\D/g, '') : '' },
-    { field: "restante", headerName: "RESTANTES", width: 120, editable: false, filter: 'agTextColumnFilter', floatingFilter: true, valueGetter: p => { return (parseFloat(p.data.estimado_total) || 0) - (parseFloat(p.data.coletado_geral) || 0); } },
-    { field: "ocorrencia", headerName: "OCORRÊNCIA", width: 220, editable: p => podeEditarLinha(p.data), cellEditor: OcorrenciaEditor, filter: ExcelStyleFilter, floatingFilter: true, floatingFilterComponent: ExcelFloatingFilter, cellStyle: p => { const cI = p.column.getId(); if (p.data && p.data.coresIndividuais && p.data.coresIndividuais[cI]) return { backgroundColor: p.data.coresIndividuais[cI], color: getTextColorForBackground(p.data.coresIndividuais[cI]), fontWeight: 'bold' }; let v = p.value ? String(p.value).toUpperCase().trim() : ''; if (v === 'ROTA CANCELADA') return { backgroundColor: '#d32f2f', color: 'white', fontWeight: 'bold', textAlign: 'center' }; return { textAlign: 'center', fontWeight: '600' }; } },
-    { field: "revertido", headerName: "REVERTIDO?", width: 120, editable: p => podeEditarLinha(p.data), cellEditor: RevertidoEditor, filter: ExcelStyleFilter, cellStyle: p => { const cI = p.column.getId(); if (p.data && p.data.coresIndividuais && p.data.coresIndividuais[cI]) return { backgroundColor: p.data.coresIndividuais[cI], color: getTextColorForBackground(p.data.coresIndividuais[cI]), fontWeight: 'bold' }; let v = p.value ? p.value.toUpperCase() : ''; let b = { fontWeight: 'bold', color: 'white', textAlign: 'center' }; if (v === 'SIM') return { ...b, backgroundColor: '#2e7d32' }; if (v === 'NÃO') return { ...b, backgroundColor: '#d32f2f' }; return null; } },
-    { field: "observacoes", headerName: "OBSERVAÇÕES DA ROTA", width: 270, editable: p => podeEditarLinha(p.data), filter: 'agTextColumnFilter', floatingFilter: true }
+    { field: "data", headerName: "DATA", width: 120, editable: false, filter: ExcelStyleFilter, comparator: comparadorDataBR },
+    { field: "monitor", headerName: "MONITOR", width: 130, editable: false, filter: ExcelStyleFilter, floatingFilter: true, floatingFilterComponent: ExcelFloatingFilter, comparator: comparadorTextoNatural },
+    { field: "cluster", headerName: "CLUSTER", width: 150, filter: ExcelStyleFilter, floatingFilter: true, floatingFilterComponent: ExcelFloatingFilter, comparator: comparadorTextoNatural, editable: p => podeEditarLinha(p.data) && isRotaAvulsaOuSemCluster(p.data), valueParser: p => { let v = String(p.newValue || "").toUpperCase().trim(); return v === "" ? "Sem Cluster" : v; }, cellStyle: p => { if (isRotaAvulsaOuSemCluster(p.data) && (!p.value || String(p.value).toUpperCase() === 'SEM CLUSTER')) return { backgroundColor: '#fff3cd', color: '#856404', fontWeight: 'bold', border: '1px dashed #ffc107' }; return null; } },
+    { field: "id_rota", headerName: "ID DE ROTA", width: 130, editable: false, filter: 'agTextColumnFilter', floatingFilter: true, comparator: comparadorNumerico },
+    { field: "nome_rota", headerName: "NOME DA ROTA", width: 190, editable: false, filter: 'agTextColumnFilter', floatingFilter: true, comparator: comparadorTextoNatural },
+    { field: "horario", headerName: "HORÁRIO", width: 110, editable: false, filter: 'agTextColumnFilter', floatingFilter: true, comparator: comparadorTextoNatural },
+    { field: "motorista", headerName: "MOTORISTA", width: 260, editable: false, filter: 'agTextColumnFilter', floatingFilter: true, comparator: comparadorTextoNatural },
+    { field: "placa", headerName: "PLACA", width: 110, editable: false, filter: 'agTextColumnFilter', floatingFilter: true, comparator: comparadorTextoNatural },
+    { field: "status", headerName: "STATUS", width: 160, editable: p => podeEditarLinha(p.data), cellEditor: StatusEditor, filter: ExcelStyleFilter, comparator: comparadorTextoNatural, cellStyle: p => { const cI = p.column.getId(); if (p.data && p.data.coresIndividuais && p.data.coresIndividuais[cI]) return { backgroundColor: p.data.coresIndividuais[cI], color: getTextColorForBackground(p.data.coresIndividuais[cI]), fontWeight: 'bold' }; let v = p.value ? p.value.toUpperCase().trim() : ''; let b = { fontWeight: 'bold', color: 'white', textAlign: 'center' }; if (v === 'CANCELADA' || v === 'CANCELADO') return { ...b, backgroundColor: '#d32f2f' }; if (v === 'DECLÍNIO' || v === 'DECLINIO') return { ...b, backgroundColor: '#800020' }; if (v === 'PENDENTE DE LOGIN') return { ...b, backgroundColor: '#ffeb3b', color: 'black' }; if (v === 'LOGADO') return { ...b, backgroundColor: '#2e7d32' }; if (v === 'COLETANDO') return { ...b, backgroundColor: '#90ee90', color: 'black' }; if (v === 'FINALIZADA' || v === 'FINALIZADO') return { ...b, backgroundColor: '#004d40' }; return null; } },
+    { field: "estimado_total", headerName: "ESTIMADO TOTAL", width: 140, editable: p => podeEditarLinha(p.data), filter: 'agTextColumnFilter', floatingFilter: true, comparator: comparadorNumerico, valueParser: p => p.newValue ? p.newValue.replace(/\D/g, '') : '' },
+    { field: "coletado_geral", headerName: "COLETADOS", width: 120, editable: p => podeEditarLinha(p.data), filter: 'agTextColumnFilter', floatingFilter: true, comparator: comparadorNumerico, valueParser: p => p.newValue ? p.newValue.replace(/\D/g, '') : '' },
+    { field: "restante", headerName: "RESTANTES", width: 120, editable: false, filter: 'agTextColumnFilter', floatingFilter: true, comparator: comparadorNumerico, valueGetter: p => { return (parseFloat(p.data.estimado_total) || 0) - (parseFloat(p.data.coletado_geral) || 0); } },
+    { field: "ocorrencia", headerName: "OCORRÊNCIA", width: 220, editable: p => podeEditarLinha(p.data), cellEditor: OcorrenciaEditor, filter: ExcelStyleFilter, floatingFilter: true, floatingFilterComponent: ExcelFloatingFilter, comparator: comparadorTextoNatural, cellStyle: p => { const cI = p.column.getId(); if (p.data && p.data.coresIndividuais && p.data.coresIndividuais[cI]) return { backgroundColor: p.data.coresIndividuais[cI], color: getTextColorForBackground(p.data.coresIndividuais[cI]), fontWeight: 'bold' }; let v = p.value ? String(p.value).toUpperCase().trim() : ''; if (v === 'ROTA CANCELADA') return { backgroundColor: '#d32f2f', color: 'white', fontWeight: 'bold', textAlign: 'center' }; return { textAlign: 'center', fontWeight: '600' }; } },
+    { field: "revertido", headerName: "REVERTIDO?", width: 120, editable: p => podeEditarLinha(p.data), cellEditor: RevertidoEditor, filter: ExcelStyleFilter, comparator: comparadorTextoNatural, cellStyle: p => { const cI = p.column.getId(); if (p.data && p.data.coresIndividuais && p.data.coresIndividuais[cI]) return { backgroundColor: p.data.coresIndividuais[cI], color: getTextColorForBackground(p.data.coresIndividuais[cI]), fontWeight: 'bold' }; let v = p.value ? p.value.toUpperCase() : ''; let b = { fontWeight: 'bold', color: 'white', textAlign: 'center' }; if (v === 'SIM') return { ...b, backgroundColor: '#2e7d32' }; if (v === 'NÃO') return { ...b, backgroundColor: '#d32f2f' }; return null; } },
+    { field: "observacoes", headerName: "OBSERVAÇÕES DA ROTA", width: 270, editable: p => podeEditarLinha(p.data), filter: 'agTextColumnFilter', floatingFilter: true, comparator: comparadorTextoNatural }
 ];
 
 const gridOptions = { 
-    columnDefs: columnDefs, rowData: [], enableCellChangeFlash: true, enableCellTextSelection: true, ensureDomOrder: true, alwaysMultiSort: true, 
+    columnDefs: columnDefs, rowData: [], enableCellChangeFlash: true, enableCellTextSelection: true, ensureDomOrder: true, alwaysMultiSort: false, 
     onModelUpdated: atualizarContadorRotas, onFilterChanged: atualizarContadorRotas, onRowDataUpdated: atualizarContadorRotas,
     onColumnResized: () => salvarEstadoColunas(), onColumnMoved: () => salvarEstadoColunas(), onColumnVisible: () => salvarEstadoColunas(), onColumnPinned: () => salvarEstadoColunas(),
     defaultColDef: { 
@@ -945,25 +992,25 @@ function filtrarBaseRelatorio(dId, hId, iniId, fimId, contId) {
 }
 
 function aplicarFiltroUnificadoEstatisticas() {
-    mostrarLoading("Processando estatísticas e gráficos...");
-    setTimeout(() => {
-        try {
-            const baseFiltrada = filtrarBaseRelatorio('filtro-data-est', 'filtro-hub-est', 'data-ini-est', 'data-fim-est', 'container-periodo-est');
-            gerarBI(baseFiltrada);
-            limparFiltroMotivoOC();
-            gerarOC(baseFiltrada);
-            gerarGeralOperacao(baseFiltrada);
-        } finally {
-            esconderLoading();
-        }
-    }, 40);
+    const baseFiltrada = filtrarBaseRelatorio('filtro-data-est', 'filtro-hub-est', 'data-ini-est', 'data-fim-est', 'container-periodo-est');
+    gerarBI(baseFiltrada);
+    limparFiltroMotivoOC();
+    gerarOC(baseFiltrada);
+    gerarGeralOperacao(baseFiltrada);
 }
 
 function aplicarFiltroHubBI() { aplicarFiltroUnificadoEstatisticas(); }
 function aplicarFiltroOC() { aplicarFiltroUnificadoEstatisticas(); }
 
-function carregarRotas(silencioso = false) {
-    if (!silencioso) mostrarLoading("Carregando rotas de monitoramento...");
+function carregarRotas(exibirToastRobo = false) {
+    carregandoRotasAgora = true;
+    const abaMonitoramentoAtiva = document.getElementById('aba-monitoramento')?.classList.contains('ativo');
+    let mostrouLoad = false;
+    if (!rotasJaCarregadas && abaMonitoramentoAtiva) {
+        mostrarLoading("Abrindo tela...");
+        mostrouLoad = true;
+    }
+
     fetch(`${API_BASE_URL}/rotas`).then(r=>r.json()).then(d=>{
         if(!d.erro && Array.isArray(d)){
             d.forEach(l => {
@@ -975,17 +1022,27 @@ function carregarRotas(silencioso = false) {
             });
             if (currentUser.hubs !== "TODOS") { const mh = currentUser.hubs.toUpperCase().split(',').map(h=>h.trim()); rotasGlobais = d.filter(r => mh.some(h => (r.nome_rota || "").toUpperCase().includes(h))); } else rotasGlobais = d;
             rotasGlobais = ordenarRotasPorSequencia(rotasGlobais);
+            rotasJaCarregadas = true;
             if (document.getElementById('home-stat-rotas')) document.getElementById('home-stat-rotas').innerText = rotasGlobais.length;
             popularDropdownsHubMonitoramento(extrairHubs(rotasGlobais, 'nome_rota')); aplicarFiltroHubPlanilha(); inicializarEscala();
             if (rotasBrutas.length > 0) aplicarFiltroUnificadoEstatisticas();
+            if (exibirToastRobo) mostrarToastRobo("Informações da planilha atualizadas pelo robô!");
         }
     }).finally(() => {
-        if (!silencioso) esconderLoading();
+        carregandoRotasAgora = false;
+        if (mostrouLoad) esconderLoading();
     });
 }
 
-function carregarRelatorios(silencioso = false) {
-    if (!silencioso) mostrarLoading("Carregando base analítica de relatórios...");
+function carregarRelatorios(exibirToastRobo = false) {
+    carregandoRelatoriosAgora = true;
+    const abaEstatisticasAtiva = document.getElementById('aba-estatisticas')?.classList.contains('ativo');
+    let mostrouLoad = false;
+    if (!relatoriosJaCarregados && abaEstatisticasAtiva) {
+        mostrarLoading("Abrindo tela...");
+        mostrouLoad = true;
+    }
+
     fetch(`${API_BASE_URL}/rotas_brutas`).then(r=>r.json()).then(d=>{
         if(Array.isArray(d) && d.length > 0){
             if (currentUser.hubs !== "TODOS") { const mh = currentUser.hubs.toUpperCase().split(',').map(h=>h.trim()); rotasBrutas = d.filter(r => mh.some(h => String(r["Nome da Rota"] || "").toUpperCase().includes(h))); } else rotasBrutas = d;
@@ -993,8 +1050,11 @@ function carregarRelatorios(silencioso = false) {
             popularDropdownsDataBI(extrairDatasBI(rotasBrutas));
             aplicarFiltroUnificadoEstatisticas();
         }
+        relatoriosJaCarregados = true;
+        if (exibirToastRobo) mostrarToastRobo("Estatísticas e relatórios atualizados pelo robô!");
     }).finally(() => {
-        if (!silencioso) esconderLoading();
+        carregandoRelatoriosAgora = false;
+        if (mostrouLoad) esconderLoading();
     });
 }
 
@@ -1064,11 +1124,12 @@ function iniciarSistemaAposLogin() {
         document.getElementById('label-data-hoje').innerText = dH.split('-').reverse().join('/');
     }
     
+    // Carrega tudo em segundo plano sem exibir tela de carregamento no login!
     carregarMetas();
     carregarEdicoesOcorrencias();
     carregarCoresCustomizadas();
-    carregarRotas();
-    carregarRelatorios();
+    carregarRotas(false);
+    carregarRelatorios(false);
     carregarTickets();
 
     setInterval(carregarTickets, 5000);
@@ -1110,8 +1171,9 @@ function iniciarSistemaAposLogin() {
                         tm.scrollTop = tm.scrollHeight;
                     }
                     ultimoIndiceLog = d.novo_indice;
-                    if (aP) carregarRotas();
-                    if (aB) carregarRelatorios();
+                    // Atualiza sem tela de loading e mostra apenas o pop-up discreto no canto superior direito!
+                    if (aP) carregarRotas(true);
+                    if (aB) carregarRelatorios(true);
                 }
             })
             .catch(() => {
@@ -2002,8 +2064,22 @@ function mudarAba(id, btn){
         if(id === 'aba-monitoramento' && gridApi) {
             setTimeout(() => { restaurarEstadoColunas(); atualizarContadorRotas(); }, 50);
         }
-        esconderLoading();
-    }, 120);
+
+        // Se a aba escolhida ainda não terminou a 1ª carga do banco, aguarda terminar antes de tirar o "Abrindo tela..."
+        const aguardandoDados = (id === 'aba-monitoramento' && !rotasJaCarregadas) || (id === 'aba-estatisticas' && !relatoriosJaCarregados);
+        if (aguardandoDados) {
+            const checkInterval = setInterval(() => {
+                const pronto = (id === 'aba-monitoramento' && rotasJaCarregadas) || (id === 'aba-estatisticas' && relatoriosJaCarregados);
+                if (pronto) {
+                    clearInterval(checkInterval);
+                    esconderLoading();
+                }
+            }, 150);
+            setTimeout(() => { clearInterval(checkInterval); esconderLoading(); }, 6000);
+        } else {
+            esconderLoading();
+        }
+    }, 150);
 }
 function navegarPelosCards(idAba, idBotaoSidebar) { mudarAba(idAba, document.getElementById(idBotaoSidebar)); const sb = document.getElementById("sidebar"); if (sb && sb.classList.contains("aberta")) { sb.classList.remove("aberta"); document.getElementById("main-content").classList.remove("empurrado"); } }
 function mudarSubAba(id, btn){
