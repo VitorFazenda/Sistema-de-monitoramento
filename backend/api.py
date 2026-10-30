@@ -1,6 +1,7 @@
 import os
 import re
 from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import json
@@ -572,3 +573,21 @@ async def atualizar_cor(request: Request):
         return {"sucesso": True}
     except Exception: 
         return {}
+
+# ==========================================
+# DOWNLOAD DE RELATÓRIO PARA O PC DO USUÁRIO
+# ==========================================
+@app.get("/download_relatorio/{nome_arquivo}")
+def baixar_relatorio_pc(nome_arquivo: str):
+    nome_seguro = os.path.basename(nome_arquivo)
+    pasta_downloads = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'temp', 'downloads_pc'))
+    caminho_completo = os.path.join(pasta_downloads, nome_seguro)
+    
+    if os.path.exists(caminho_completo):
+        return FileResponse(
+            path=caminho_completo,
+            filename=nome_seguro,
+            media_type='application/octet-stream'
+        )
+    return {"sucesso": False, "erro": "Arquivo não encontrado no servidor."}  
+  

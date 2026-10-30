@@ -189,14 +189,25 @@ function abrirModalMensagens() {
     } else {
         if (header) header.style.background = '#1a237e';
         corpo.innerHTML = `
-            <div style="text-align: center; padding: 20px 10px;">
-                <div style="font-size: 36px; margin-bottom: 10px;">✅</div>
-                <h3 style="margin: 0 0 6px 0; color: #1e293b; font-size: 16px;">Nenhuma mensagem de alerta!</h3>
-                <p style="margin: 0; color: #64748b; font-size: 13px;">A sessão do Mercado Livre está operando normalmente sem pendências de Okta.</p>
+            <div style="text-align: center; padding: 26px 10px;">
+                <div style="font-size: 36px; margin-bottom: 10px;">📭</div>
+                <h3 style="margin: 0; color: #1e293b; font-size: 16px;">Nenhuma mensagem de alerta!</h3>
             </div>
         `;
     }
     modal.classList.add('show');
+}
+
+function dispararDownloadRelatorioPC(nomeArquivo) {
+    if (!nomeArquivo) return;
+    const urlDownload = `${API_BASE_URL}/download_relatorio/${encodeURIComponent(nomeArquivo.trim())}`;
+    const link = document.createElement('a');
+    link.href = urlDownload;
+    link.setAttribute('download', nomeArquivo.trim());
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    mostrarToastRobo(`📥 Baixando relatório (${nomeArquivo.trim()}) no seu PC!`);
 }
 
 function fecharModalMensagens() {
@@ -1002,60 +1013,69 @@ function aplicarFiltroUnificadoEstatisticas() {
 function aplicarFiltroHubBI() { aplicarFiltroUnificadoEstatisticas(); }
 function aplicarFiltroOC() { aplicarFiltroUnificadoEstatisticas(); }
 
+let promessaRotas = null;
+let promessaRelatorios = null;
+
 function carregarRotas(exibirToastRobo = false) {
     carregandoRotasAgora = true;
-    const abaMonitoramentoAtiva = document.getElementById('aba-monitoramento')?.classList.contains('ativo');
-    let mostrouLoad = false;
-    if (!rotasJaCarregadas && abaMonitoramentoAtiva) {
-        mostrarLoading("Abrindo tela...");
-        mostrouLoad = true;
-    }
-
-    fetch(`${API_BASE_URL}/rotas`).then(r=>r.json()).then(d=>{
-        if(!d.erro && Array.isArray(d)){
-            d.forEach(l => {
-                if (l.monitor) l.monitor = String(l.monitor).toUpperCase().trim();
-                if (!l.ocorrencia) l.ocorrencia = "";
-                if (l.cores_customizadas) {
-                    try { l.coresIndividuais = JSON.parse(l.cores_customizadas); } catch(e) { l.coresIndividuais = {}; }
+    promessaRotas = fetch(`${API_BASE_URL}/rotas`)
+        .then(r => r.json())
+        .then(d => {
+            if (!d.erro && Array.isArray(d)) {
+                d.forEach(l => {
+                    if (l.monitor) l.monitor = String(l.monitor).toUpperCase().trim();
+                    if (!l.ocorrencia) l.ocorrencia = "";
+                    if (l.cores_customizadas) {
+                        try { l.coresIndividuais = JSON.parse(l.cores_customizadas); } catch(e) { l.coresIndividuais = {}; }
+                    }
+                });
+                if (currentUser.hubs !== "TODOS") {
+                    const mh = currentUser.hubs.toUpperCase().split(',').map(h => h.trim());
+                    rotasGlobais = d.filter(r => mh.some(h => (r.nome_rota || "").toUpperCase().includes(h)));
+                } else {
+                    rotasGlobais = d;
                 }
-            });
-            if (currentUser.hubs !== "TODOS") { const mh = currentUser.hubs.toUpperCase().split(',').map(h=>h.trim()); rotasGlobais = d.filter(r => mh.some(h => (r.nome_rota || "").toUpperCase().includes(h))); } else rotasGlobais = d;
-            rotasGlobais = ordenarRotasPorSequencia(rotasGlobais);
-            rotasJaCarregadas = true;
-            if (document.getElementById('home-stat-rotas')) document.getElementById('home-stat-rotas').innerText = rotasGlobais.length;
-            popularDropdownsHubMonitoramento(extrairHubs(rotasGlobais, 'nome_rota')); aplicarFiltroHubPlanilha(); inicializarEscala();
-            if (rotasBrutas.length > 0) aplicarFiltroUnificadoEstatisticas();
-            if (exibirToastRobo) mostrarToastRobo("Informações da planilha atualizadas pelo robô!");
-        }
-    }).finally(() => {
-        carregandoRotasAgora = false;
-        if (mostrouLoad) esconderLoading();
-    });
+                rotasGlobais = ordenarRotasPorSequencia(rotasGlobais);
+                rotasJaCarregadas = true;
+                if (document.getElementById('home-stat-rotas')) document.getElementById('home-stat-rotas').innerText = rotasGlobais.length;
+                popularDropdownsHubMonitoramento(extrairHubs(rotasGlobais, 'nome_rota'));
+                aplicarFiltroHubPlanilha();
+                inicializarEscala();
+                if (rotasBrutas.length > 0) aplicarFiltroUnificadoEstatisticas();
+                if (exibirToastRobo) mostrarToastRobo("Informações da planilha atualizadas pelo robô!");
+            }
+        })
+        .catch(e => console.error(e))
+        .finally(() => {
+            carregandoRotasAgora = false;
+        });
+    return promessaRotas;
 }
 
 function carregarRelatorios(exibirToastRobo = false) {
     carregandoRelatoriosAgora = true;
-    const abaEstatisticasAtiva = document.getElementById('aba-estatisticas')?.classList.contains('ativo');
-    let mostrouLoad = false;
-    if (!relatoriosJaCarregados && abaEstatisticasAtiva) {
-        mostrarLoading("Abrindo tela...");
-        mostrouLoad = true;
-    }
-
-    fetch(`${API_BASE_URL}/rotas_brutas`).then(r=>r.json()).then(d=>{
-        if(Array.isArray(d) && d.length > 0){
-            if (currentUser.hubs !== "TODOS") { const mh = currentUser.hubs.toUpperCase().split(',').map(h=>h.trim()); rotasBrutas = d.filter(r => mh.some(h => String(r["Nome da Rota"] || "").toUpperCase().includes(h))); } else rotasBrutas = d;
-            popularDropdownsHubBI(extrairHubs(rotasBrutas, 'Nome da Rota'));
-            popularDropdownsDataBI(extrairDatasBI(rotasBrutas));
-            aplicarFiltroUnificadoEstatisticas();
-        }
-        relatoriosJaCarregados = true;
-        if (exibirToastRobo) mostrarToastRobo("Estatísticas e relatórios atualizados pelo robô!");
-    }).finally(() => {
-        carregandoRelatoriosAgora = false;
-        if (mostrouLoad) esconderLoading();
-    });
+    promessaRelatorios = fetch(`${API_BASE_URL}/rotas_brutas`)
+        .then(r => r.json())
+        .then(d => {
+            if (Array.isArray(d) && d.length > 0) {
+                if (currentUser.hubs !== "TODOS") {
+                    const mh = currentUser.hubs.toUpperCase().split(',').map(h => h.trim());
+                    rotasBrutas = d.filter(r => mh.some(h => String(r["Nome da Rota"] || "").toUpperCase().includes(h)));
+                } else {
+                    rotasBrutas = d;
+                }
+                popularDropdownsHubBI(extrairHubs(rotasBrutas, 'Nome da Rota'));
+                popularDropdownsDataBI(extrairDatasBI(rotasBrutas));
+                aplicarFiltroUnificadoEstatisticas();
+                relatoriosJaCarregados = true;
+            }
+            if (exibirToastRobo) mostrarToastRobo("Estatísticas e relatórios atualizados pelo robô!");
+        })
+        .catch(e => console.error(e))
+        .finally(() => {
+            carregandoRelatoriosAgora = false;
+        });
+    return promessaRelatorios;
 }
 
 function atualizarBadgeSessaoOkta(statusLogin, roboOnline) {
@@ -1167,11 +1187,16 @@ function iniciarSistemaAposLogin() {
                             tm.innerHTML += `<span style="color: #31D086;">[${l.hora}] [MOTOR]</span> <span style="color: #e2e8f0;">${l.msg}</span><br>`;
                             if (l.msg.includes("MONITORAMENTO CONCLUÍDO")) aP = true;
                             if (l.msg.includes("RELATÓRIO BAIXADO")) aB = true;
+
+                            // Se o robô gerou um arquivo para baixar no PC, dispara o download automático!
+                            const matchDown = l.msg.match(/\[DOWNLOAD_PC:([^\]]+)\]/);
+                            if (matchDown && matchDown[1]) {
+                                dispararDownloadRelatorioPC(matchDown[1]);
+                            }
                         });
                         tm.scrollTop = tm.scrollHeight;
                     }
                     ultimoIndiceLog = d.novo_indice;
-                    // Atualiza sem tela de loading e mostra apenas o pop-up discreto no canto superior direito!
                     if (aP) carregarRotas(true);
                     if (aB) carregarRelatorios(true);
                 }
@@ -2055,43 +2080,73 @@ document.addEventListener('click', function(e) {
     if (sb && sb.classList.contains("aberta") && !sb.contains(e.target) && !mI.contains(e.target)) { sb.classList.remove("aberta"); document.getElementById("main-content").classList.remove("empurrado"); }
     const uM = document.getElementById('userMenu'); if (uM && uM.classList.contains('show') && !e.target.closest('.user-profile')) uM.classList.remove('show');
 });
-function mudarAba(id, btn){
+async function mudarAba(id, btn) {
+    mostrarLoading("Abrindo tela...");
+    await new Promise(r => setTimeout(r, 80));
+
+    document.querySelectorAll('.conteudo-aba, .sidebar-btn').forEach(e => e.classList.remove('ativo'));
+    document.getElementById(id).classList.add('ativo');
+    if (btn) btn.classList.add('ativo');
+
+    try {
+        if (id === 'aba-monitoramento') {
+            if (carregandoRotasAgora && promessaRotas) {
+                await promessaRotas;
+            } else if (!rotasJaCarregadas || rotasGlobais.length === 0) {
+                await carregarRotas(false);
+            }
+            if (gridApi) {
+                restaurarEstadoColunas();
+                atualizarContadorRotas();
+            }
+        } else if (id === 'aba-estatisticas') {
+            if (carregandoRelatoriosAgora && promessaRelatorios) {
+                await promessaRelatorios;
+            } else if (!relatoriosJaCarregados || rotasBrutas.length === 0) {
+                await carregarRelatorios(false);
+            } else if (BI_DATA.raw.length === 0 && rotasBrutas.length > 0) {
+                aplicarFiltroUnificadoEstatisticas();
+            }
+        }
+    } catch (e) {
+        console.error(e);
+    }
+
+    // Aguarda o navegador pintar os KPIs e tabelas na tela antes de fechar o "Abrindo tela..."
+    requestAnimationFrame(() => {
+        setTimeout(() => {
+            esconderLoading();
+        }, 250);
+    });
+}
+
+function navegarPelosCards(idAba, idBotaoSidebar) {
+    mudarAba(idAba, document.getElementById(idBotaoSidebar));
+    const sb = document.getElementById("sidebar");
+    if (sb && sb.classList.contains("aberta")) {
+        sb.classList.remove("aberta");
+        document.getElementById("main-content").classList.remove("empurrado");
+    }
+}
+
+function mudarSubAba(id, btn) {
     mostrarLoading("Abrindo tela...");
     setTimeout(() => {
-        document.querySelectorAll('.conteudo-aba, .sidebar-btn').forEach(e => e.classList.remove('ativo'));
-        document.getElementById(id).classList.add('ativo');
-        if (btn) btn.classList.add('ativo');
-        if(id === 'aba-monitoramento' && gridApi) {
-            setTimeout(() => { restaurarEstadoColunas(); atualizarContadorRotas(); }, 50);
-        }
-
-        // Se a aba escolhida ainda não terminou a 1ª carga do banco, aguarda terminar antes de tirar o "Abrindo tela..."
-        const aguardandoDados = (id === 'aba-monitoramento' && !rotasJaCarregadas) || (id === 'aba-estatisticas' && !relatoriosJaCarregados);
-        if (aguardandoDados) {
-            const checkInterval = setInterval(() => {
-                const pronto = (id === 'aba-monitoramento' && rotasJaCarregadas) || (id === 'aba-estatisticas' && relatoriosJaCarregados);
-                if (pronto) {
-                    clearInterval(checkInterval);
-                    esconderLoading();
-                }
-            }, 150);
-            setTimeout(() => { clearInterval(checkInterval); esconderLoading(); }, 6000);
-        } else {
-            esconderLoading();
-        }
-    }, 150);
-}
-function navegarPelosCards(idAba, idBotaoSidebar) { mudarAba(idAba, document.getElementById(idBotaoSidebar)); const sb = document.getElementById("sidebar"); if (sb && sb.classList.contains("aberta")) { sb.classList.remove("aberta"); document.getElementById("main-content").classList.remove("empurrado"); } }
-function mudarSubAba(id, btn){
-    mostrarLoading("Carregando visualização...");
-    setTimeout(() => {
         const aP = btn ? btn.closest('.conteudo-aba') : null;
-        if (aP) { aP.querySelectorAll('.sub-conteudo, .sub-tab-btn').forEach(e => e.classList.remove('ativo')); }
-        else { document.querySelectorAll('.sub-conteudo, .sub-tab-btn').forEach(e => e.classList.remove('ativo')); }
+        if (aP) {
+            aP.querySelectorAll('.sub-conteudo, .sub-tab-btn').forEach(e => e.classList.remove('ativo'));
+        } else {
+            document.querySelectorAll('.sub-conteudo, .sub-tab-btn').forEach(e => e.classList.remove('ativo'));
+        }
         document.getElementById(id).classList.add('ativo');
         if (btn) btn.classList.add('ativo');
-        esconderLoading();
-    }, 100);
+
+        requestAnimationFrame(() => {
+            setTimeout(() => {
+                esconderLoading();
+            }, 200);
+        });
+    }, 80);
 }
 function toggleMenu(){ document.getElementById('sidebar').classList.toggle('aberta'); document.getElementById('main-content').classList.toggle('empurrado'); }
 function abrirModalExportacao(){ const lc = document.getElementById('colunas-export-list'); lc.innerHTML = ''; gridApi.getColumns().forEach(c => { let l = document.createElement('label'); l.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; cursor:pointer; color:#334155;'; l.innerHTML = `<input type="checkbox" value="${c.getColId()}" checked style="width:16px; height:16px; accent-color:#1a237e;"> ${c.getColDef().headerName}`; lc.appendChild(l); }); document.getElementById('exportModal').classList.add('show'); }

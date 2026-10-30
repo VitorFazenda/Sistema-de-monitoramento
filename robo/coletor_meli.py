@@ -778,17 +778,16 @@ def executar_relatorio(page, lista_hubs, ticket):
                 
             if exportar_local == "local":
                 try:
-                    pasta_export = os.path.abspath(os.path.join(DIRETORIO_RAIZ, "..", "Relatorios_Extraidos"))
-                    if not os.path.exists(pasta_export):
-                        os.makedirs(pasta_export, exist_ok=True)
+                    pasta_export = os.path.join(PASTA_TEMP, "downloads_pc")
+                    os.makedirs(pasta_export, exist_ok=True)
                     
                     extensao = ".csv" if caminho_arquivo.endswith('.csv') else ".xlsx"
                     prefixo = "Global" if "TODOS" in lista_hubs else lista_hubs[0]
                     nome_pc = f"Relatorio_{prefixo}_{datetime.datetime.now().strftime('%d%m%Y_%H%M%S')}{extensao}"
                     shutil.copy(caminho_arquivo, os.path.join(pasta_export, nome_pc))
-                    log_painel("💾 O Relatório foi SALVO na pasta: Relatorios_Extraidos")
+                    log_painel(f"💾 [DOWNLOAD_PC:{nome_pc}] Transferindo relatório para o seu computador...")
                 except Exception as e:
-                    log_painel(f"❌ Erro ao mover para a pasta local: {e}")
+                    log_painel(f"❌ Erro ao preparar download para o PC: {e}")
             
             if os.path.exists(caminho_arquivo):
                 os.remove(caminho_arquivo)
@@ -826,7 +825,7 @@ def iniciar_orquestrador():
             limpar_travas_sessao()
             with sync_playwright() as p:
                 modo_str = "HEADLESS (Servidor)" if HEADLESS_MODE else "INTERFACE VISÍVEL (Local)"
-                log_painel(f"🤖 ROBÔ INICIADO (VERSÃO 2.3 - FILA ORDENADA & OKTA FIX)! Modo: {modo_str}")
+                log_painel(f"🤖 ROBÔ INICIADO | Modo: {modo_str}")
                 
                 navegador = p.chromium.launch_persistent_context(
                     user_data_dir=PASTA_SESSAO, 
