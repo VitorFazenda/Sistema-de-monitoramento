@@ -16,6 +16,14 @@
 </head>
 <body>
 
+    <!-- ================= TELA DE CARREGAMENTO GLOBAL (SPINNER) ================= -->
+    <div id="loading-overlay">
+        <div class="loading-box">
+            <div class="spinner-bolinha"></div>
+            <div id="loading-text" class="loading-text">Carregando informações...</div>
+        </div>
+    </div>
+
     <!-- ================= TELA DE LOGIN ================= -->
     <div id="login-overlay">
         <div class="login-box">
@@ -35,6 +43,12 @@
             <span>Sistema de Monitoramento</span>
         </div>
         <div class="nav-right">
+            <!-- CAIXA DE MENSAGENS E ALERTA OKTA AO LADO DO NOME -->
+            <div class="inbox-alert-btn" id="btn-caixa-mensagens" onclick="abrirModalMensagens()" title="Caixa de Mensagens e Alertas do Sistema">
+                ✉️
+                <span id="bolinha-alerta-okta" class="inbox-badge-dot" style="display: none;">1</span>
+            </div>
+
             <div class="user-profile" onclick="document.getElementById('userMenu').classList.toggle('show')">
                 <div class="user-bubble" id="nome-usuario-logado">👤 User</div>
                 <div id="userMenu" class="user-menu-dropdown">
@@ -856,6 +870,22 @@
         </div>
     </div>
 
+    <!-- MODAL CAIXA DE MENSAGENS / ALERTA DE SESSÃO OKTA -->
+    <div id="modalCaixaMensagens" class="modal-overlay">
+        <div class="modal-content" style="width: 480px; max-width: 95vw;">
+            <div class="modal-header" id="header-modal-mensagens" style="background: #1a237e;">
+                <span>✉️ Caixa de Mensagens do Sistema</span>
+                <span style="cursor:pointer; opacity:0.8;" onclick="fecharModalMensagens()">❌</span>
+            </div>
+            <div style="padding: 20px;" id="corpo-modal-mensagens">
+                <!-- Preenchido dinamicamente pelo app.js -->
+            </div>
+            <div style="padding: 12px 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: 10px; background: #f1f5f9;">
+                <button class="btn-footer-cancel" onclick="fecharModalMensagens()">Fechar</button>
+            </div>
+        </div>
+    </div>
+    
     <!-- O nosso ficheiro JavaScript -->
     <script src="app.js"></script>
 </body>

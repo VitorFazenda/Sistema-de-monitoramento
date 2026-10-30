@@ -140,7 +140,7 @@ def daemon_heartbeat():
         time.sleep(3)
 
 # ==========================================
-# MÓDULO DE LOGIN AUTOMATIZADO (OKTA SEM TIMEOUT DE 2 MIN)
+# MÓDULO DE LOGIN AUTOMATIZADO (OKTA ESTÁVEL SEM DUPLA NAVEGAÇÃO)
 # ==========================================
 def clicar_botao_avancar_okta(page):
     """Localiza e clica no botão de submissão do Okta (Próximo / Verificar / Confirmar)"""
@@ -158,20 +158,30 @@ def clicar_botao_avancar_okta(page):
             return True
     return False
 
+def pagina_esta_no_okta(page):
+    url_atual = (page.url or "").lower()
+    if "auth-meli.adminml.com" in url_atual or "okta.com" in url_atual:
+        return True
+    try:
+        if page.locator('input[name="identifier"], #okta-sign-in, [data-se="o-form"]').count() > 0:
+            return True
+    except Exception:
+        pass
+    return False
+
 def garantir_login(page, forcar_recarregamento=False):
     log_painel("🔎 Verificando sessão do Mercado Livre...")
-    try:
-        page.goto("https://envios.adminml.com/logistics/first-mile/monitoring", wait_until="domcontentloaded", timeout=60000)
-        time.sleep(4)
-        if forcar_recarregamento:
-            page.reload(wait_until="domcontentloaded", timeout=60000)
-            time.sleep(4)
-    except Exception as e:
-        log_painel(f"⚠️ Aviso ao carregar URL inicial: {e}")
-
-    time.sleep(2)
+    url_atual = page.url or ""
     
-    if "auth-meli.adminml.com" not in page.url and "okta.com" not in page.url:
+    try:
+        if forcar_recarregamento or "envios.adminml.com" not in url_atual:
+            page.goto("https://envios.adminml.com/logistics/first-mile/monitoring", wait_until="domcontentloaded", timeout=60000)
+            time.sleep(5)
+    except Exception as e:
+        log_painel(f"⚠️ Aviso ao carregar URL inicial: {str(e).splitlines()[0]}")
+        time.sleep(3)
+
+    if not pagina_esta_no_okta(page):
         informar_status_login("LOGADO")
         log_painel("✅ Sessão ativa. Não foi necessário realizar login.")
         return True
@@ -183,7 +193,7 @@ def garantir_login(page, forcar_recarregamento=False):
     ultimo_user_preenchido = 0
     ultima_senha_preenchida = 0
 
-    while "auth-meli.adminml.com" in page.url or "okta.com" in page.url:
+    while pagina_esta_no_okta(page):
         cmd = ler_comando_okta_api()
 
         if cmd.get("reiniciar_login"):
@@ -193,7 +203,7 @@ def garantir_login(page, forcar_recarregamento=False):
             ultima_senha_preenchida = 0
             try:
                 page.goto("https://envios.adminml.com/logistics/first-mile/monitoring", wait_until="domcontentloaded", timeout=60000)
-                time.sleep(3)
+                time.sleep(4)
             except Exception as e:
                 log_painel(f"⚠️ Erro ao recarregar página: {e}")
             continue
@@ -201,25 +211,30 @@ def garantir_login(page, forcar_recarregamento=False):
         codigo_recebido = str(cmd.get("codigo", "")).strip()
 
         try:
+            # 1. Campo de Utilizador (Identifier)
             campo_user = page.locator('input[name="identifier"]')
             if campo_user.count() > 0 and campo_user.first.is_visible():
-                if (time.time() - ultimo_user_preenchido) > 8:
+                # Só preenche o identifier se não houver campo de senha/código visível na mesma tela
+                campos_cred_visiveis = page.locator('input[type="password"]:visible, input[name="credentials.passcode"]:visible, input[name="credentials.totp"]:visible').count()
+                if campos_cred_visiveis == 0 and (time.time() - ultimo_user_preenchido) > 8:
                     log_painel(f"👤 Preenchendo utilizador ({MELI_USER}) e avançando...")
                     campo_user.first.fill("")
                     campo_user.first.fill(MELI_USER)
                     clicar_botao_avancar_okta(page)
                     ultimo_user_preenchido = time.time()
                     aviso_okta_enviado = False
-                    time.sleep(3)
+                    time.sleep(3.5)
                     continue
 
+            # 2. Se aparecer lista de fatores de autenticação
             btn_fator = page.locator('[data-se="okta_verify-totp"] a, [data-se="google_otp"] a, a:has-text("Inserir um código"), a:has-text("Enter a code")')
             if btn_fator.count() > 0 and btn_fator.first.is_visible():
                 log_painel("📲 Selecionando opção de código Okta Verify...")
                 btn_fator.first.click()
-                time.sleep(2)
+                time.sleep(2.5)
                 continue
 
+            # 3. Campos de Senha ou Código Okta
             campo_cred = page.locator('input[name="credentials.passcode"], input[name="credentials.totp"], input[name="answer"], input[type="password"], input[type="tel"], input[type="text"]')
             if campo_cred.count() > 0:
                 input_alvo = None
@@ -232,21 +247,32 @@ def garantir_login(page, forcar_recarregamento=False):
 
                 if input_alvo:
                     tipo_input = (input_alvo.get_attribute("type") or "text").lower()
-                    texto_form = (page.locator("form").first.text_content() or "").lower() if page.locator("form").count() > 0 else ""
+                    auto_attr = (input_alvo.get_attribute("autocomplete") or "").lower()
+                    
+                    # Lê o título/label específico do campo (sem ser enganado pelo rodapé do form)
+                    titulo_form = ""
+                    try:
+                        titulo_el = page.locator('h2.okta-form-title, [data-se="o-form-head"], label[for]').first
+                        if titulo_el.count() > 0:
+                            titulo_form = (titulo_el.text_content() or "").lower()
+                    except Exception:
+                        pass
 
-                    is_tela_senha = (
-                        ("senha" in texto_form or "password" in texto_form) and 
-                        ("okta verify" not in texto_form and "código" not in texto_form and "code" not in texto_form)
-                    ) or (tipo_input == "password" and "okta verify" not in texto_form and "código" not in texto_form)
+                    # Se o utilizador acabou de enviar um código de 6 dígitos pelo painel, prioriza injetar o código se não for explicitamente um input password puro
+                    is_tela_codigo = (
+                        "verify" in titulo_form or "código" in titulo_form or "code" in titulo_form or
+                        tipo_input == "tel" or auto_attr == "one-time-code"
+                    )
+                    is_tela_senha = (tipo_input == "password" and not is_tela_codigo)
 
-                    if is_tela_senha:
+                    if is_tela_senha and not codigo_recebido:
                         if (time.time() - ultima_senha_preenchida) > 6:
                             log_painel("🔑 Tela de palavra-passe detetada! A injetar senha automaticamente...")
                             input_alvo.fill("")
                             input_alvo.fill(MELI_PASS)
                             clicar_botao_avancar_okta(page)
                             ultima_senha_preenchida = time.time()
-                            log_painel("⏳ Palavra-passe enviada! A aguardar redirecionamento para o sistema...")
+                            log_painel("⏳ Palavra-passe enviada! A aguardar redirecionamento...")
                             time.sleep(4)
                             continue
                     else:
@@ -262,7 +288,7 @@ def garantir_login(page, forcar_recarregamento=False):
                             input_alvo.fill(codigo_para_usar)
                             clicar_botao_avancar_okta(page)
                             aviso_okta_enviado = False
-                            time.sleep(3)
+                            time.sleep(4)
                             continue
 
         except Exception:
@@ -270,18 +296,10 @@ def garantir_login(page, forcar_recarregamento=False):
 
         time.sleep(1.5)
 
-    try:
-        page.wait_for_url("**/first-mile/monitoring**", timeout=30000)
-        informar_status_login("LOGADO")
-        log_painel("✅ Login efetuado com sucesso! Sessão ativa e guardada.")
-        return True
-    except Exception:
-        if "auth-meli" not in page.url and "okta" not in page.url:
-            informar_status_login("LOGADO")
-            log_painel("✅ Login concluído com sucesso!")
-            return True
-        log_painel("⚠️ Não foi possível confirmar o redirecionamento final.")
-        return False
+    time.sleep(3)
+    informar_status_login("LOGADO")
+    log_painel("✅ Login concluído com sucesso! Sessão ativa e guardada.")
+    return True
 
 def traduzir_status_meli(status_bruto: str, coletados_int: int) -> str:
     """Converte os status do Mercado Livre para o padrão oficial da planilha JM"""
@@ -295,95 +313,107 @@ def traduzir_status_meli(status_bruto: str, coletados_int: int) -> str:
     return st if st else "PENDENTE DE LOGIN"
 
 # ==========================================
-# MÓDULO 1: RASPAGEM DE MONITORAMENTO (COM STATUS JM E PACOTES CORRIGIDOS)
+# MÓDULO 1: RASPAGEM DE MONITORAMENTO (SEMPRE LIMPAR TODOS OS FILTROS PRIMEIRO)
 # ==========================================
+def clicar_limpar_todos_filtros(page):
+    """Clica sempre no botão 'Limpar todos' do Mercado Livre antes de qualquer raspagem"""
+    seletores_limpar = [
+        'button.button-link__button:has(span:has-text("Limpar todos"))',
+        'span.andes-typography:has-text("Limpar todos")',
+        'text=Limpar todos'
+    ]
+    for sel in seletores_limpar:
+        try:
+            btn = page.locator(sel).first
+            if btn.count() > 0 and btn.is_visible():
+                log_painel("🧹 Limpando todos os filtros da tela do Mercado Livre...")
+                btn.click(timeout=8000)
+                time.sleep(3)
+                return True
+        except Exception:
+            pass
+    return False
+
 def executar_raspagem(page, hub_alvo):
     for tentativa in range(2):
         try:
             log_painel(f"⚡ Iniciando raspagem DOM-Read para {hub_alvo} (Tentativa {tentativa+1}/2)...")
-            page.goto(
-                "https://envios.adminml.com/logistics/first-mile/monitoring",
-                wait_until="domcontentloaded",
-                timeout=60000
-            )
             
-            time.sleep(5)
+            if tentativa > 0 or "first-mile/monitoring" not in (page.url or ""):
+                page.goto(
+                    "https://envios.adminml.com/logistics/first-mile/monitoring",
+                    wait_until="domcontentloaded",
+                    timeout=60000
+                )
+                time.sleep(5)
+            else:
+                time.sleep(2)
             
-            if "auth-meli.adminml.com" in page.url or "okta.com" in page.url:
-                log_painel("🔐 Sessão pediu reautenticação durante a abertura. Verificando login...")
+            if pagina_esta_no_okta(page):
+                log_painel("🔐 Sessão pediu reautenticação. Verificando login...")
                 garantir_login(page)
-                time.sleep(4)
+                page.goto(
+                    "https://envios.adminml.com/logistics/first-mile/monitoring",
+                    wait_until="domcontentloaded",
+                    timeout=60000
+                )
+                time.sleep(5)
+
+            # REGRA OBRIGATÓRIA: Sempre limpa todos os filtros primeiro (tanto para HUB específico quanto para TODOS)
+            clicar_limpar_todos_filtros(page)
 
             if hub_alvo != "TODOS":
+                log_painel(f"📍 Selecionando depósito {hub_alvo} após limpar filtros...")
                 combo_deposito = page.locator('button.compact-selector__trigger[aria-label="Depósito"], button[role="combobox"][aria-label="Depósito"]').first
-                combo_deposito.wait_for(state="visible", timeout=15000)
+                combo_deposito.wait_for(state="visible", timeout=20000)
 
-                tags_atuais = [t.strip().upper() for t in combo_deposito.locator('.andes-tag__label').all_inner_texts()]
-                
-                if tags_atuais == [hub_alvo.upper()]:
-                    log_painel(f"✅ Filtro do depósito {hub_alvo} já está selecionado na tela!")
-                else:
-                    btn_limpar = page.locator("text=Limpar todos").first
-                    if btn_limpar.count() > 0 and btn_limpar.is_visible():
-                        btn_limpar.click()
-                        time.sleep(2.5)
-
-                    if combo_deposito.get_attribute("aria-expanded") != "true":
-                        combo_deposito.click()
-                        time.sleep(1.5)
-
-                    selecionados = page.locator('li[role="option"][aria-selected="true"]').all()
-                    for item_sel in selecionados:
-                        chave_sel = (item_sel.get_attribute("data-key") or "").strip().upper()
-                        if chave_sel and chave_sel != hub_alvo.upper():
-                            item_sel.click()
-                            time.sleep(0.4)
-
-                    campo_busca = page.locator('input.andes-form-control__field[data-andes-searchbox-input="true"], input[placeholder="Buscar"]').first
-                    campo_busca.wait_for(state="visible", timeout=10000)
-                    campo_busca.fill("")
-                    campo_busca.fill(hub_alvo)
+                if combo_deposito.get_attribute("aria-expanded") != "true":
+                    combo_deposito.click(timeout=10000)
                     time.sleep(1.5)
 
-                    opcao_hub = page.locator(f'li[role="option"][data-key="{hub_alvo}"], li[role="option"]:has-text("{hub_alvo}")').first
-                    if opcao_hub.count() == 0 or not opcao_hub.is_visible():
-                        log_painel(f"❌ ERRO: O depósito '{hub_alvo}' não existe na lista do Mercado Livre! Verifique a digitação.")
-                        page.keyboard.press("Escape")
-                        return "HUB_INVALIDO"
+                campo_busca = page.locator('input.andes-form-control__field[data-andes-searchbox-input="true"], input[placeholder="Buscar"]').first
+                campo_busca.wait_for(state="visible", timeout=10000)
+                campo_busca.fill("")
+                campo_busca.fill(hub_alvo)
+                time.sleep(1.5)
 
-                    ja_marcado = opcao_hub.get_attribute("aria-selected") == "true"
-                    if not ja_marcado:
-                        chk_input = opcao_hub.locator('input.andes-checkbox__input, input[type="checkbox"]').first
-                        if chk_input.count() > 0:
-                            chk_input.click(force=True)
-                        else:
-                            opcao_hub.click()
-                        time.sleep(1)
+                opcao_hub = page.locator(f'li[role="option"][data-key="{hub_alvo}"], li[role="option"]:has-text("{hub_alvo}")').first
+                if opcao_hub.count() == 0 or not opcao_hub.is_visible():
+                    log_painel(f"❌ ERRO: O depósito '{hub_alvo}' não existe na lista do Mercado Livre! Verifique a digitação.")
+                    page.keyboard.press("Escape")
+                    return "HUB_INVALIDO"
 
-                    btn_aplicar = page.locator('.compact-selector__footer button:has-text("Aplicar"), button:has(span[data-andes-button-content="true"]:has-text("Aplicar"))').first
-                    if btn_aplicar.count() > 0 and btn_aplicar.is_visible() and not btn_aplicar.is_disabled():
-                        btn_aplicar.click()
-                        time.sleep(4)
+                if opcao_hub.get_attribute("aria-selected") != "true":
+                    chk_input = opcao_hub.locator('input.andes-checkbox__input, input[type="checkbox"]').first
+                    if chk_input.count() > 0:
+                        chk_input.click(force=True)
                     else:
-                        page.keyboard.press("Escape")
-                        time.sleep(2)
-            else:
-                btn_limpar = page.locator("text=Limpar todos").first
-                if btn_limpar.count() > 0 and btn_limpar.is_visible():
-                    btn_limpar.click()
-                    time.sleep(3)
-                log_painel("🌎 Raspando TODAS as rotas disponíveis no sistema (Sem Filtro de HUB).")
+                        opcao_hub.click(timeout=5000)
+                    time.sleep(1)
 
+                btn_aplicar = page.locator('.compact-selector__footer button:has-text("Aplicar"), button:has(span[data-andes-button-content="true"]:has-text("Aplicar"))').first
+                if btn_aplicar.count() > 0 and btn_aplicar.is_visible() and not btn_aplicar.is_disabled():
+                    btn_aplicar.click(timeout=8000)
+                    time.sleep(4)
+                else:
+                    page.keyboard.press("Escape")
+                    time.sleep(2)
+            else:
+                log_painel("🌎 Filtros limpos! Raspando TODAS as rotas disponíveis no sistema.")
+
+            # Leitura da div.list > div.monitoring-row (pega card superior e inferior juntos)
             dados_raspados = []
             pagina_atual = 1
-            seletor_cards = "div.monitoring-row-higher, .monitoring-row"
+            seletor_cards = "div.list div.monitoring-row, div.monitoring-row, div.monitoring-row-higher"
             
             while True:
                 try:
                     page.wait_for_selector(seletor_cards, timeout=10000)
-                    linhas_rotas = page.locator("div.monitoring-row-higher").all()
+                    linhas_rotas = page.locator("div.list > div.monitoring-row").all()
                     if not linhas_rotas:
-                        linhas_rotas = page.locator(".monitoring-row").all()
+                        linhas_rotas = page.locator("div.monitoring-row").all()
+                    if not linhas_rotas:
+                        linhas_rotas = page.locator("div.monitoring-row-higher").all()
 
                     for linha in linhas_rotas:
                         texto_card_completo = linha.text_content() or ""
@@ -405,10 +435,10 @@ def executar_raspagem(page, hub_alvo):
                         mot_el = linha.locator('[data-testid="carrier-or-driver-name"]').first
                         motorista = (mot_el.text_content() or "").strip() if mot_el.count() > 0 else ""
 
+                        # Placa extraída diretamente da div.monitoring-row-lower-details.vehicle p (mesmo oculta)
                         placa = ""
                         try:
-                            card_pai = linha.locator("..")
-                            placa_el = card_pai.locator(".monitoring-row-lower-details.vehicle p").first
+                            placa_el = linha.locator(".monitoring-row-lower-details.vehicle p").first
                             if placa_el.count() > 0:
                                 placa_bruta = placa_el.text_content() or ""
                                 placa = placa_bruta.split("|")[0].strip()
@@ -418,7 +448,6 @@ def executar_raspagem(page, hub_alvo):
                         horario_el = linha.locator(".monitoring-row-higher-details.eta p, div[data-testid='active-route-eta'] p").first
                         horario = (horario_el.text_content() or "").strip() if horario_el.count() > 0 else "Sem Horário"
 
-                        # Extração direta e segura de Pacotes Coletados, Estimados e Restantes via Regex
                         match_col = re.search(r'(\d[\d\.]*)\s*(?:pacotes\s*)?coletados', texto_card_completo, re.IGNORECASE)
                         coletados = re.sub(r'\D', '', match_col.group(1)) if match_col else "0"
 
@@ -429,7 +458,6 @@ def executar_raspagem(page, hub_alvo):
                         int_col = int(coletados) if coletados.isdigit() else 0
                         restante = str(int_est - int_col)
 
-                        # Status do Meli traduzido para as regras da planilha JM
                         status_el = linha.locator(".status-main p.bold, .monitoring-row-higher-details.status p.bold").first
                         status_meli_bruto = (status_el.text_content() or "").strip() if status_el.count() > 0 else "Sem início"
                         status_traduzido = traduzir_status_meli(status_meli_bruto, int_col)
@@ -458,7 +486,7 @@ def executar_raspagem(page, hub_alvo):
                     parent_li = botao_proximo.locator("..")
                     classes_pai = (parent_li.get_attribute("class") or "").lower()
                     if "disabled" not in classes_pai and not botao_proximo.is_disabled():
-                        botao_proximo.click()
+                        botao_proximo.click(timeout=8000)
                         time.sleep(3)
                         pagina_atual += 1
                         continue
@@ -472,7 +500,7 @@ def executar_raspagem(page, hub_alvo):
                     
                     if insp.has_table('rotas_monitoramento'):
                         df_antigo = pd.read_sql_table('rotas_monitoramento', con=motor_db)
-                        for col_extra in ['monitor', 'status_manual', 'restante', 'revertido', 'observacoes', 'cores_customizadas']:
+                        for col_extra in ['monitor', 'status_manual', 'restante', 'ocorrencia', 'revertido', 'observacoes', 'cores_customizadas']:
                             if col_extra not in df_antigo.columns:
                                 df_antigo[col_extra] = ""
                         
@@ -499,7 +527,6 @@ def executar_raspagem(page, hub_alvo):
                         
                         indices_comuns = df_antigo_hoje.index.intersection(df_novo.index)
                         for idx in indices_comuns:
-                            # 1. Preserva horário planejado se o novo vier como ATA/ETA
                             h_antigo = str(df_antigo_hoje.at[idx, 'horario']).upper().strip()
                             h_novo = str(df_novo.at[idx, 'horario']).upper().strip()
                             is_antigo_bom = (h_antigo not in ["SEM HORÁRIO", "NAN", ""] and "ATA" not in h_antigo and "ETA" not in h_antigo)
@@ -507,19 +534,16 @@ def executar_raspagem(page, hub_alvo):
                             if is_antigo_bom and is_novo_ruim:
                                 df_novo.at[idx, 'horario'] = df_antigo_hoje.at[idx, 'horario']
 
-                            # 2. Preserva Cluster preenchido manualmente
                             c_antigo = str(df_antigo_hoje.at[idx, 'cluster']).strip()
                             c_novo = str(df_novo.at[idx, 'cluster']).strip()
                             if c_antigo and c_antigo.upper() != "SEM CLUSTER" and c_novo.upper() == "SEM CLUSTER":
                                 df_novo.at[idx, 'cluster'] = c_antigo
 
-                            # 3. Preserva Placa se o card estava fechado
                             p_antiga = str(df_antigo_hoje.at[idx, 'placa']).strip()
                             p_nova = str(df_novo.at[idx, 'placa']).strip()
                             if p_antiga and p_antiga.upper() != "NAN" and not p_nova:
                                 df_novo.at[idx, 'placa'] = p_antiga
 
-                            # 4. NÃO SUBSTITUI STATUS ESCRITO MANUALMENTE PELO USUÁRIO
                             st_antigo = str(df_antigo_hoje.at[idx, 'status'] or '').upper().strip()
                             foi_manual = str(df_antigo_hoje.at[idx, 'status_manual'] or '').upper().strip() == "SIM"
                             status_exclusivo_manual = st_antigo in ["DECLÍNIO", "DECLINIO", "COLETANDO"]
@@ -542,6 +566,7 @@ def executar_raspagem(page, hub_alvo):
                                 monitores_novas.append(mapa_monitores.get((h_n, c_n), ""))
                             rotas_novas['monitor'] = monitores_novas
                             rotas_novas['status_manual'] = ""
+                            rotas_novas['ocorrencia'] = ""
 
                         df_antigo_hoje.reset_index(inplace=True)
                         rotas_novas.reset_index(inplace=True)
@@ -551,6 +576,7 @@ def executar_raspagem(page, hub_alvo):
                     else:
                         df_novo['monitor'] = ""
                         df_novo['status_manual'] = ""
+                        df_novo['ocorrencia'] = ""
                         df_novo.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
                         
                 except Exception as e:
@@ -564,16 +590,12 @@ def executar_raspagem(page, hub_alvo):
         except Exception as e:
             detalhe_erro = str(e).splitlines()[0] if str(e) else "Erro desconhecido"
             log_painel(f"⚠️ Erro na tentativa {tentativa+1} ({hub_alvo}): {detalhe_erro}")
-            try:
-                page.reload(wait_until="domcontentloaded", timeout=30000)
-            except Exception:
-                pass
             time.sleep(3)
             
     return False
 
 # ==========================================
-# MÓDULO 2: DOWNLOAD DE RELATÓRIO COM OPÇÕES
+# MÓDULO 2: DOWNLOAD DE RELATÓRIO (COM ESPERA DE CARREGAMENTO ATÉ 30S)
 # ==========================================
 def executar_relatorio(page, lista_hubs, ticket):
     for tentativa in range(2):
@@ -583,7 +605,13 @@ def executar_relatorio(page, lista_hubs, ticket):
                 os.makedirs(PASTA_TEMP, exist_ok=True)
                 
             page.goto("https://envios.adminml.com/logistics/reports/first-mile/reports-collections/query", wait_until="domcontentloaded", timeout=60000)
-            time.sleep(4)
+            time.sleep(5)
+
+            if pagina_esta_no_okta(page):
+                log_painel("🔐 Sessão pediu reautenticação ao abrir relatório. Verificando login...")
+                garantir_login(page)
+                page.goto("https://envios.adminml.com/logistics/reports/first-mile/reports-collections/query", wait_until="domcontentloaded", timeout=60000)
+                time.sleep(5)
             
             regras_str = ticket.get("regras", "{}")
             try:
@@ -595,32 +623,34 @@ def executar_relatorio(page, lista_hubs, ticket):
             
             log_painel("📅 Selecionando filtro de data: Hoje")
             try:
-                page.locator('#input-date-rangeweek').first.click()
-                time.sleep(1)
+                campo_data = page.locator('#input-date-rangeweek').first
+                campo_data.wait_for(state="visible", timeout=15000)
+                campo_data.click()
+                time.sleep(1.2)
                 
                 btn_hoje = page.locator('td[data-today="true"] button').first
-                if btn_hoje.is_visible():
+                if btn_hoje.count() > 0 and btn_hoje.is_visible():
                     btn_hoje.click()
                     time.sleep(0.5)
                 else:
                     hoje_str = datetime.datetime.now().strftime('%Y-%m-%d')
                     btn_fallback = page.locator(f'td[data-day="{hoje_str}"] button').first
-                    if btn_fallback.is_visible():
+                    if btn_fallback.count() > 0 and btn_fallback.is_visible():
                         btn_fallback.click()
                     time.sleep(0.5)
                     
                 btn_aplicar_data = page.locator('span[data-andes-button-content="true"]:has-text("Aplicar")').first
-                if btn_aplicar_data.is_visible():
+                if btn_aplicar_data.count() > 0 and btn_aplicar_data.is_visible():
                     btn_aplicar_data.click()
-                time.sleep(1)
+                time.sleep(1.5)
             except Exception as e:
-                log_painel(f"⚠️ Aviso: Não foi possível selecionar a data de hoje. Tentando avançar. Detalhe: {e}")
+                log_painel(f"⚠️ Aviso ao selecionar data: {str(e).splitlines()[0]}")
             
             if "TODOS" not in lista_hubs:
                 marcados = 0
                 for h in lista_hubs:
                     label_hub = page.locator(f'label.andes-checkbox:has-text("{h}")').first
-                    if label_hub.is_visible():
+                    if label_hub.count() > 0 and label_hub.is_visible():
                         label_hub.locator('input[type="checkbox"]').check(force=True)
                         marcados += 1
                         time.sleep(0.5)
@@ -634,21 +664,28 @@ def executar_relatorio(page, lista_hubs, ticket):
                 log_painel("🌎 Extraindo relatório Global (Sem filtro de depósito).")
                 
             btn_ver = page.locator('span[data-andes-button-content="true"]:has-text("Ver resultados")').first
-            if btn_ver.is_visible():
+            if btn_ver.count() > 0 and btn_ver.is_visible():
                 btn_ver.click()
                 
-            time.sleep(5)
-            
-            log_painel("⏳ Verificando a disponibilidade do relatório...")
+            log_painel("⏳ Aguardando processamento do relatório no Mercado Livre...")
             botao_baixar = page.locator('button[data-andes-button="true"]:has(span:has-text("Baixar"))').first
             
-            if botao_baixar.is_disabled():
-                log_painel(f"📭 Não há resultados de paradas para a data/HUB selecionado ({', '.join(lista_hubs)}). A ignorar extração.")
+            # Aguarda até 30 segundos o botão "Baixar" ficar habilitado (evita falso "Não há resultados" em relatórios grandes)
+            habilitou_baixar = False
+            for _ in range(15):
+                time.sleep(2)
+                if botao_baixar.count() > 0 and botao_baixar.is_visible() and not botao_baixar.is_disabled():
+                    habilitou_baixar = True
+                    break
+                # Se aparecer mensagem explícita de que não há dados na tela, encerra antes
+                if page.locator("text=Não foram encontrados resultados, text=Sem resultados").count() > 0:
+                    break
+            
+            if not habilitou_baixar:
+                log_painel(f"📭 Não há resultados de paradas disponíveis para ({', '.join(lista_hubs)}) após aguardar carregamento.")
                 return True 
                 
-            botao_baixar.wait_for(state="visible", timeout=60000)
-            
-            with page.expect_download() as download_info:
+            with page.expect_download(timeout=60000) as download_info:
                 botao_baixar.click()
                 
             caminho_arquivo = os.path.join(PASTA_TEMP, download_info.value.suggested_filename)
@@ -729,17 +766,14 @@ def executar_relatorio(page, lista_hubs, ticket):
             return True
             
         except Exception as e:
-            log_painel(f"⚠️ Erro de página no relatório (Tentativa {tentativa+1}): {e}")
-            try:
-                page.reload() 
-            except Exception:
-                pass
+            detalhe = str(e).splitlines()[0] if str(e) else "Erro desconhecido"
+            log_painel(f"⚠️ Erro de página no relatório (Tentativa {tentativa+1}): {detalhe}")
             time.sleep(3)
             
     return False
 
 # ==========================================
-# CÉREBRO DO ORQUESTRADOR (BLINDADO CONTRA QUEDAS)
+# CÉREBRO DO ORQUESTRADOR (COM ORDEM DE FILA E ROTINA + AVULSO)
 # ==========================================
 def iniciar_orquestrador():
     threading.Thread(target=daemon_heartbeat, daemon=True).start()
@@ -762,7 +796,7 @@ def iniciar_orquestrador():
             limpar_travas_sessao()
             with sync_playwright() as p:
                 modo_str = "HEADLESS (Servidor)" if HEADLESS_MODE else "INTERFACE VISÍVEL (Local)"
-                log_painel(f"🤖 ROBÔ INICIADO (VERSÃO 2.2)! Modo: {modo_str}")
+                log_painel(f"🤖 ROBÔ INICIADO (VERSÃO 2.3 - FILA ORDENADA & OKTA FIX)! Modo: {modo_str}")
                 
                 navegador = p.chromium.launch_persistent_context(
                     user_data_dir=PASTA_SESSAO, 
@@ -777,7 +811,7 @@ def iniciar_orquestrador():
                 page = navegador.pages[0] if navegador.pages else navegador.new_page()
                 estado_anterior = ""
                 
-                garantir_login(page)
+                garantir_login(page, forcar_recarregamento=True)
                 
                 while True:
                     try:
@@ -790,70 +824,85 @@ def iniciar_orquestrador():
                         df_tickets = pd.read_sql_table('tickets_robo', con=motor_db)
                         ticket_processado = False
                         
-                        ativos = df_tickets[df_tickets['status'] == 'ATIVO']
+                        ativos = df_tickets[df_tickets['status'] == 'ATIVO'].copy()
                         qtd_ativos = len(ativos)
-                        nomes_fila = ativos['hub'].tolist()
-                        
-                        for index, row in df_tickets.iterrows():
-                            ticket = row.to_dict()
+                        nomes_fila = [f"{r['hub']} ({r['tipo'].upper()})" for _, r in ativos.iterrows()]
+
+                        # Filtra todos os tickets que devem rodar agora e ordena: 1º Avulsos, 2º Rotinas
+                        prontos_para_rodar = []
+                        for index, row in ativos.iterrows():
+                            t_dict = row.to_dict()
+                            if avaliar_se_deve_rodar(t_dict):
+                                prioridade = 0 if t_dict.get("tipo") == "avulso" else 1
+                                prontos_para_rodar.append((prioridade, index, t_dict))
+
+                        prontos_para_rodar.sort(key=lambda x: (x[0], x[1]))
+
+                        for pos_fila, (_, _, ticket) in enumerate(prontos_para_rodar, start=1):
+                            garantir_login(page, forcar_recarregamento=False)
                             
-                            if avaliar_se_deve_rodar(ticket):
-                                garantir_login(page)
-                                
-                                hub_string = ticket['hub']
-                                acao = ticket.get('acao', 'monitoramento')
-                                lista_hubs = [h.strip() for h in hub_string.split(',')]
-                                
-                                log_painel(f"🚨 EXECUTANDO AGORA: {hub_string} | Ação: {acao.upper()}")
-                                log_painel(f"📋 Fila atual: {max(0, qtd_ativos - 1)} rotina(s) aguardando na espera.")
-                                estado_anterior = "trabalhando"
-                                
-                                try:
-                                    sucesso_geral = True
-                                    if acao == "monitoramento":
-                                        hub_invalido = False
-                                        for h in lista_hubs:
-                                            res = executar_raspagem(page, h)
-                                            if res == "HUB_INVALIDO":
-                                                hub_invalido = True
-                                                sucesso_geral = False
-                                            elif not res:
-                                                sucesso_geral = False
-                                        if sucesso_geral:
-                                            log_painel(f"✅ MONITORAMENTO CONCLUÍDO para: {hub_string}")
-                                        elif hub_invalido and ticket['tipo'] == 'avulso':
-                                            log_painel(f"🗑️ Removendo ticket avulso inválido ({hub_string}) da fila para não travar o robô.")
-                                            with motor_db.begin() as conn:
-                                                conn.execute(text("DELETE FROM tickets_robo WHERE hub = :h AND acao = :a"), {"h": hub_string, "a": acao})
-                                            ticket_processado = True
-                                            break
-                                            
-                                    elif acao == "relatorio":
-                                        sucesso_geral = executar_relatorio(page, lista_hubs, ticket)
-                                        if sucesso_geral:
-                                            log_painel(f"✅ RELATÓRIO BAIXADO para: {hub_string}")
-                                            
+                            hub_string = ticket['hub']
+                            acao = ticket.get('acao', 'monitoramento')
+                            tipo_ticket = ticket.get('tipo', 'avulso')
+                            lista_hubs = [h.strip() for h in hub_string.split(',')]
+                            
+                            restantes_prontos = len(prontos_para_rodar) - pos_fila
+                            log_painel(f"🚨 EXECUTANDO ({pos_fila}º da Fila): {hub_string} [{tipo_ticket.upper()}] | Ação: {acao.upper()}")
+                            if restantes_prontos > 0:
+                                prox_nomes = ", ".join([f"{ idx_p + 1 }º {tk['hub']} ({tk['acao'].upper()})" for idx_p, (_, _, tk) in enumerate(prontos_para_rodar[pos_fila:], start=pos_fila)])
+                                log_painel(f"📋 Próximos na ordem imediata: {prox_nomes}")
+                            estado_anterior = "trabalhando"
+                            
+                            try:
+                                sucesso_geral = True
+                                if acao == "monitoramento":
+                                    hub_invalido = False
+                                    for h in lista_hubs:
+                                        res = executar_raspagem(page, h)
+                                        if res == "HUB_INVALIDO":
+                                            hub_invalido = True
+                                            sucesso_geral = False
+                                        elif not res:
+                                            sucesso_geral = False
                                     if sucesso_geral:
-                                        nova_coleta = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                        novo_status = "CONCLUIDO" if ticket['tipo'] == 'avulso' else "ATIVO"
-                                        
+                                        log_painel(f"✅ MONITORAMENTO CONCLUÍDO para: {hub_string} ({tipo_ticket.upper()})")
+                                    elif hub_invalido and tipo_ticket == 'avulso':
+                                        log_painel(f"🗑️ Removendo ticket avulso inválido ({hub_string}) da fila.")
                                         with motor_db.begin() as conn:
-                                            conn.execute(text("""
-                                                UPDATE tickets_robo 
-                                                SET ultima_coleta = :uc, status = :st 
-                                                WHERE hub = :h AND acao = :a
-                                            """), {"uc": nova_coleta, "st": novo_status, "h": hub_string, "a": acao})
-                                        
+                                            conn.execute(
+                                                text("DELETE FROM tickets_robo WHERE hub = :h AND acao = :a AND tipo = 'avulso'"),
+                                                {"h": hub_string, "a": acao}
+                                            )
                                         ticket_processado = True
-                                        break 
+                                        break
                                         
-                                except Exception as e:
-                                    log_painel(f"❌ Erro crítico ao processar ticket: {e}")
+                                elif acao == "relatorio":
+                                    sucesso_geral = executar_relatorio(page, lista_hubs, ticket)
+                                    if sucesso_geral:
+                                        log_painel(f"✅ RELATÓRIO BAIXADO para: {hub_string} ({tipo_ticket.upper()})")
+                                        
+                                if sucesso_geral:
+                                    nova_coleta = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    novo_status = "CONCLUIDO" if tipo_ticket == 'avulso' else "ATIVO"
                                     
+                                    # Atualiza APENAS o ticket do tipo executado (não cancela a Rotina se rodou um Avulso!)
+                                    with motor_db.begin() as conn:
+                                        conn.execute(text("""
+                                            UPDATE tickets_robo 
+                                            SET ultima_coleta = :uc, status = :st 
+                                            WHERE hub = :h AND acao = :a AND tipo = :t
+                                        """), {"uc": nova_coleta, "st": novo_status, "h": hub_string, "a": acao, "t": tipo_ticket})
+                                    
+                                    ticket_processado = True
+                                    break 
+                                    
+                            except Exception as e:
+                                log_painel(f"❌ Erro crítico ao processar ticket: {e}")
+                                
                         if not ticket_processado:
                             if estado_anterior != "dormindo":
                                 nomes_str = ", ".join(nomes_fila) if nomes_fila else "Nenhum"
-                                log_painel(f"💤 Standby. {qtd_ativos} rotina(s) ativas: [{nomes_str}].")
+                                log_painel(f"💤 Standby. {qtd_ativos} tarefa(s) na fila: [{nomes_str}].")
                                 estado_anterior = "dormindo"
                             time.sleep(4)
                             

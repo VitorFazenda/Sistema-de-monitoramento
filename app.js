@@ -36,6 +36,153 @@ let GO_DATA = {
     motivosAgrupados: []
 };
 
+// ==========================================
+// CONTROLE DE TELA DE CARREGAMENTO (SPINNER)
+// ==========================================
+let contadorRequisicoesLoading = 0;
+
+function mostrarLoading(mensagem = "Carregando informações...") {
+    contadorRequisicoesLoading++;
+    const overlay = document.getElementById('loading-overlay');
+    const txt = document.getElementById('loading-text');
+    if (txt) txt.innerText = mensagem;
+    if (overlay) overlay.classList.add('show');
+}
+
+function esconderLoading() {
+    contadorRequisicoesLoading = Math.max(0, contadorRequisicoesLoading - 1);
+    if (contadorRequisicoesLoading === 0) {
+        const overlay = document.getElementById('loading-overlay');
+        if (overlay) overlay.classList.remove('show');
+    }
+}
+
+// ==========================================
+// CAIXA DE MENSAGENS E ALARME SONORO OKTA
+// ==========================================
+let alertaOktaAtivo = false;
+let ultimoBipOkta = 0;
+
+function tocarAlarmeSonoroOkta() {
+    const agora = Date.now();
+    // Toca o bip a cada 12 segundos enquanto estiver aguardando o Okta
+    if (agora - ultimoBipOkta < 12000) return;
+    ultimoBipOkta = agora;
+
+    try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        const ctx = new AudioCtx();
+
+        // Toca 2 bips curtos de alerta
+        [0, 0.22].forEach(atraso => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(880, ctx.currentTime + atraso);
+            gain.gain.setValueAtTime(0.25, ctx.currentTime + atraso);
+            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + atraso + 0.18);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(ctx.currentTime + atraso);
+            osc.stop(ctx.currentTime + atraso + 0.18);
+        });
+    } catch (e) {}
+}
+
+function gerenciarAlertaCaixaMensagens(statusLogin, roboOnline) {
+    const btnInbox = document.getElementById('btn-caixa-mensagens');
+    const bolinha = document.getElementById('bolinha-alerta-okta');
+    if (!btnInbox || !bolinha) return;
+
+    if (roboOnline && statusLogin === 'AGUARDANDO_OKTA') {
+        const entrouAgora = !alertaOktaAtivo;
+        alertaOktaAtivo = true;
+        bolinha.style.display = 'flex';
+        btnInbox.classList.add('alerta-ativo');
+        tocarAlarmeSonoroOkta();
+
+        // Se acabou de expirar, já abre o pop-up automaticamente na primeira vez para avisar na hora
+        if (entrouAgora) {
+            abrirModalMensagens();
+        }
+    } else {
+        alertaOktaAtivo = false;
+        bolinha.style.display = 'none';
+        btnInbox.classList.remove('alerta-ativo');
+    }
+}
+
+function abrirModalMensagens() {
+    const modal = document.getElementById('modalCaixaMensagens');
+    const header = document.getElementById('header-modal-mensagens');
+    const corpo = document.getElementById('corpo-modal-mensagens');
+    if (!modal || !corpo) return;
+
+    if (alertaOktaAtivo) {
+        if (header) header.style.background = '#dc2626';
+        corpo.innerHTML = `
+            <div style="background: #fef2f2; border: 2px solid #ef4444; border-radius: 10px; padding: 16px; text-align: center; margin-bottom: 15px;">
+                <div style="font-size: 34px; margin-bottom: 8px;">🚨</div>
+                <h3 style="margin: 0 0 8px 0; color: #991b1b; font-size: 16px;">Atenção: Autenticação Necessária!</h3>
+                <p style="margin: 0; color: #b91c1c; font-size: 14px; font-weight: 700; line-height: 1.5;">
+                    "A sessão expirou e precisa colocar o Okta para o robô voltar a trabalhar."
+                </p>
+            </div>
+            <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px;">
+                <label style="font-size: 11px; font-weight: 800; color: #1e293b; display: block; margin-bottom: 6px;">📲 ENVIAR CÓDIGO OKTA (6 DÍGITOS) DIRETO DAQUI:</label>
+                <div style="display: flex; gap: 8px;">
+                    <input type="text" id="input-codigo-okta-modal" maxlength="7" placeholder="Ex: 838683" style="flex: 1; padding: 9px; border: 1px solid #94a3b8; border-radius: 6px; font-weight: 800; font-size: 15px; text-align: center; letter-spacing: 2px;" onkeypress="if(event.key === 'Enter') enviarOktaPeloModal()">
+                    <button onclick="enviarOktaPeloModal()" style="background: #16a34a; color: white; border: none; padding: 9px 16px; border-radius: 6px; font-weight: 800; cursor: pointer;">
+                        🔑 Enviar Okta
+                    </button>
+                </div>
+            </div>
+        `;
+    } else {
+        if (header) header.style.background = '#1a237e';
+        corpo.innerHTML = `
+            <div style="text-align: center; padding: 20px 10px;">
+                <div style="font-size: 36px; margin-bottom: 10px;">✅</div>
+                <h3 style="margin: 0 0 6px 0; color: #1e293b; font-size: 16px;">Nenhuma mensagem de alerta!</h3>
+                <p style="margin: 0; color: #64748b; font-size: 13px;">A sessão do Mercado Livre está operando normalmente sem pendências de Okta.</p>
+            </div>
+        `;
+    }
+    modal.classList.add('show');
+}
+
+function fecharModalMensagens() {
+    const modal = document.getElementById('modalCaixaMensagens');
+    if (modal) modal.classList.remove('show');
+}
+
+function enviarOktaPeloModal() {
+    const inp = document.getElementById('input-codigo-okta-modal');
+    if (!inp) return;
+    const codigo = inp.value.replace(/\D/g, '').trim();
+    if (!codigo || codigo.length < 6) return alert("Digite os 6 dígitos do código Okta Verify!");
+
+    mostrarLoading("Enviando código Okta para o robô...");
+    fetch(`${API_BASE_URL}/enviar_codigo_okta`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ codigo: codigo })
+    }).then(r => r.json()).then(res => {
+        esconderLoading();
+        if (res.sucesso) {
+            inp.value = '';
+            fecharModalMensagens();
+            navegarPelosCards('aba-robo', 'btn-aba-robo');
+        } else {
+            alert("Erro ao enviar código: " + (res.erro || ""));
+        }
+    }).catch(() => {
+        esconderLoading();
+        alert("Erro de conexão com a API.");
+    });
+}
+
 function getTextColorForBackground(hexColor) {
     if (!hexColor || !hexColor.startsWith('#')) return 'black';
     let r = parseInt(hexColor.substr(1, 2), 16), g = parseInt(hexColor.substr(3, 2), 16), b = parseInt(hexColor.substr(5, 2), 16);
@@ -577,13 +724,71 @@ function pintarCelulaFocada(cor) {
         fetch(`${API_BASE_URL}/atualizar_cor`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id_rota: rN.data.id_rota, coluna: cI, cor: cor }) });
     }
 }
-function salvarEstadoColunas() { if (gridApi && currentUser) localStorage.setItem('gridState_' + currentUser.username, JSON.stringify(gridApi.getColumnState())); }
+const LISTA_OCORRENCIAS_PADRAO = [
+    "Coleta Parcial",
+    "Não passei pelo endereço",
+    "Não tenho mais espaço",
+    "Não estão na agência",
+    "O endereço está em uma área inacessível",
+    "O local estava fechado",
+    "O vendedor não os tem preparados",
+    "Rota Cancelada",
+    "O vendedor não tem o código de autorização",
+    "O endereço está incorreto",
+    "Não posso continuar dirigindo",
+    "Não há pacotes para coletar",
+    "Tive um problema mecânico",
+    "Os pacotes ou etiquetas estão em mau estado",
+    "Sem ocorrência"
+];
+
+class OcorrenciaEditor {
+    init(p) {
+        this.c = document.createElement('div');
+        this.c.style.cssText = 'width:100%; height:100%; display:flex; align-items:center; background:white;';
+        this.i = document.createElement('input');
+        this.i.type = 'text';
+        this.i.value = p.value || '';
+        this.i.style.cssText = 'width:100%; height:100%; border:none; outline:none; font-weight:bold; text-align:center; font-family:inherit; font-size:13px; color:#1a237e;';
+        let dlId = 'dl-ocorrencia';
+        this.i.setAttribute('list', dlId);
+        if (!document.getElementById(dlId)) {
+            let dl = document.createElement('datalist');
+            dl.id = dlId;
+            LISTA_OCORRENCIAS_PADRAO.forEach(o => {
+                let op = document.createElement('option');
+                op.value = o;
+                dl.appendChild(op);
+            });
+            document.body.appendChild(dl);
+        }
+        this.i.addEventListener('keydown', e => {
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') e.stopPropagation();
+        });
+        this.c.appendChild(this.i);
+    }
+    getGui() { return this.c; }
+    afterGuiAttached() { this.i.focus(); this.i.select(); }
+    getValue() {
+        let v = this.i.value.trim();
+        if (!v) return "";
+        let vLower = v.toLowerCase();
+        return LISTA_OCORRENCIAS_PADRAO.find(o => o.toLowerCase() === vLower) ||
+               LISTA_OCORRENCIAS_PADRAO.find(o => o.toLowerCase().startsWith(vLower)) ||
+               v;
+    }
+    isPopup() { return false; }
+}
+
+function salvarEstadoColunas() {
+    if (gridApi && currentUser) localStorage.setItem('gridState_v2_' + currentUser.username, JSON.stringify(gridApi.getColumnState()));
+}
 function restaurarEstadoColunas() {
     if (!gridApi || !currentUser) return;
-    const es = localStorage.getItem('gridState_' + currentUser.username);
+    const es = localStorage.getItem('gridState_v2_' + currentUser.username);
     if (es) {
         try {
-            const parsed = JSON.parse(es).filter(c => c.colId !== 'ocorrencia' && c.colId !== 'pontualidade');
+            const parsed = JSON.parse(es).filter(c => c.colId !== 'pontualidade');
             gridApi.applyColumnState({ state: parsed, applyOrder: true });
         } catch(e) {
             gridApi.sizeColumnsToFit();
@@ -603,9 +808,11 @@ const columnDefs = [
     { field: "horario", headerName: "HORÁRIO", width: 110, editable: false, filter: 'agTextColumnFilter', floatingFilter: true },
     { field: "motorista", headerName: "MOTORISTA", width: 260, editable: false, filter: 'agTextColumnFilter', floatingFilter: true },
     { field: "placa", headerName: "PLACA", width: 110, editable: false, filter: 'agTextColumnFilter', floatingFilter: true },
-    { field: "status", headerName: "STATUS", width: 160, editable: p => podeEditarLinha(p.data), cellEditor: StatusEditor, filter: ExcelStyleFilter, cellStyle: p => { const cI = p.column.getId(); if (p.data && p.data.coresIndividuais && p.data.coresIndividuais[cI]) return { backgroundColor: p.data.coresIndividuais[cI], color: getTextColorForBackground(p.data.coresIndividuais[cI]), fontWeight: 'bold' }; let v = p.value ? p.value.toUpperCase().trim() : ''; let b = { fontWeight: 'bold', color: 'white', textAlign: 'center' }; if (v === 'CANCELADA' || v === 'CANCELADO') return { ...b, backgroundColor: '#d32f2f' }; if (v === 'DECLÍNIO' || v === 'DECLINIO') return { ...b, backgroundColor: '#800020' }; if (v === 'PENDENTE DE LOGIN') return { ...b, backgroundColor: '#ffeb3b', color: 'black' }; if (v === 'LOGADO') return { ...b, backgroundColor: '#2e7d32' }; if (v === 'COLETANDO') return { ...b, backgroundColor: '#90ee90', color: 'black' }; if (v === 'FINALIZADA' || v === 'FINALIZADO') return { ...b, backgroundColor: '#004d40' }; return null; } },    { field: "estimado_total", headerName: "ESTIMADO TOTAL", width: 140, editable: p => podeEditarLinha(p.data), filter: 'agTextColumnFilter', floatingFilter: true, valueParser: p => p.newValue ? p.newValue.replace(/\D/g, '') : '' },
+    { field: "status", headerName: "STATUS", width: 160, editable: p => podeEditarLinha(p.data), cellEditor: StatusEditor, filter: ExcelStyleFilter, cellStyle: p => { const cI = p.column.getId(); if (p.data && p.data.coresIndividuais && p.data.coresIndividuais[cI]) return { backgroundColor: p.data.coresIndividuais[cI], color: getTextColorForBackground(p.data.coresIndividuais[cI]), fontWeight: 'bold' }; let v = p.value ? p.value.toUpperCase().trim() : ''; let b = { fontWeight: 'bold', color: 'white', textAlign: 'center' }; if (v === 'CANCELADA' || v === 'CANCELADO') return { ...b, backgroundColor: '#d32f2f' }; if (v === 'DECLÍNIO' || v === 'DECLINIO') return { ...b, backgroundColor: '#800020' }; if (v === 'PENDENTE DE LOGIN') return { ...b, backgroundColor: '#ffeb3b', color: 'black' }; if (v === 'LOGADO') return { ...b, backgroundColor: '#2e7d32' }; if (v === 'COLETANDO') return { ...b, backgroundColor: '#90ee90', color: 'black' }; if (v === 'FINALIZADA' || v === 'FINALIZADO') return { ...b, backgroundColor: '#004d40' }; return null; } },
+    { field: "estimado_total", headerName: "ESTIMADO TOTAL", width: 140, editable: p => podeEditarLinha(p.data), filter: 'agTextColumnFilter', floatingFilter: true, valueParser: p => p.newValue ? p.newValue.replace(/\D/g, '') : '' },
     { field: "coletado_geral", headerName: "COLETADOS", width: 120, editable: p => podeEditarLinha(p.data), filter: 'agTextColumnFilter', floatingFilter: true, valueParser: p => p.newValue ? p.newValue.replace(/\D/g, '') : '' },
     { field: "restante", headerName: "RESTANTES", width: 120, editable: false, filter: 'agTextColumnFilter', floatingFilter: true, valueGetter: p => { return (parseFloat(p.data.estimado_total) || 0) - (parseFloat(p.data.coletado_geral) || 0); } },
+    { field: "ocorrencia", headerName: "OCORRÊNCIA", width: 220, editable: p => podeEditarLinha(p.data), cellEditor: OcorrenciaEditor, filter: ExcelStyleFilter, floatingFilter: true, floatingFilterComponent: ExcelFloatingFilter, cellStyle: p => { const cI = p.column.getId(); if (p.data && p.data.coresIndividuais && p.data.coresIndividuais[cI]) return { backgroundColor: p.data.coresIndividuais[cI], color: getTextColorForBackground(p.data.coresIndividuais[cI]), fontWeight: 'bold' }; let v = p.value ? String(p.value).toUpperCase().trim() : ''; if (v === 'ROTA CANCELADA') return { backgroundColor: '#d32f2f', color: 'white', fontWeight: 'bold', textAlign: 'center' }; return { textAlign: 'center', fontWeight: '600' }; } },
     { field: "revertido", headerName: "REVERTIDO?", width: 120, editable: p => podeEditarLinha(p.data), cellEditor: RevertidoEditor, filter: ExcelStyleFilter, cellStyle: p => { const cI = p.column.getId(); if (p.data && p.data.coresIndividuais && p.data.coresIndividuais[cI]) return { backgroundColor: p.data.coresIndividuais[cI], color: getTextColorForBackground(p.data.coresIndividuais[cI]), fontWeight: 'bold' }; let v = p.value ? p.value.toUpperCase() : ''; let b = { fontWeight: 'bold', color: 'white', textAlign: 'center' }; if (v === 'SIM') return { ...b, backgroundColor: '#2e7d32' }; if (v === 'NÃO') return { ...b, backgroundColor: '#d32f2f' }; return null; } },
     { field: "observacoes", headerName: "OBSERVAÇÕES DA ROTA", width: 270, editable: p => podeEditarLinha(p.data), filter: 'agTextColumnFilter', floatingFilter: true }
 ];
@@ -638,6 +845,10 @@ const gridOptions = {
             rotasGlobais.forEach(r => { if (String(r.id_rota) === String(p.data.id_rota)) { r.cluster = cF; r.monitor = mA; } });
             rotasGlobais = ordenarRotasPorSequencia(rotasGlobais); aplicarFiltroHubPlanilha(); inicializarEscala();
         } else if (p.colDef.field === 'observacoes') { ep = "atualizar_observacao"; bL.observacao = p.newValue; }
+        else if (p.colDef.field === 'ocorrencia') {
+            ep = "atualizar_ocorrencia"; bL.ocorrencia = p.newValue;
+            rotasGlobais.forEach(r => { if (String(r.id_rota) === String(p.data.id_rota)) r.ocorrencia = p.newValue; });
+        }
         else if (p.colDef.field === 'revertido') {
             ep = "atualizar_revertido"; bL.revertido = p.newValue;
             rotasGlobais.forEach(r => { if (String(r.id_rota) === String(p.data.id_rota)) r.revertido = p.newValue; });
@@ -683,24 +894,28 @@ function aplicarFiltroHubPlanilha() {
 }
 
 function limparFiltrosPlanilha() {
-    const selHub = document.getElementById('filtro-hub-planilha');
-    if (selHub) selHub.value = "TODOS";
+    mostrarLoading("Limpando filtros da planilha...");
+    setTimeout(() => {
+        const selHub = document.getElementById('filtro-hub-planilha');
+        if (selHub) selHub.value = "TODOS";
 
-    if (gridApi) {
-        gridApi.setFilterModel(null);
-        ['data', 'monitor', 'cluster', 'status', 'revertido'].forEach(col => {
-            gridApi.getColumnFilterInstance(col).then(inst => {
-                if (inst && typeof inst.setModel === 'function') {
-                    inst.setModel(null);
-                }
-            }).catch(() => {});
-        });
-        document.querySelectorAll('#myGrid input[placeholder="Pesquisar..."], #myGrid .ag-floating-filter-input').forEach(inp => {
-            inp.value = '';
-        });
-        gridApi.onFilterChanged();
-    }
-    aplicarFiltroHubPlanilha();
+        if (gridApi) {
+            gridApi.setFilterModel(null);
+            ['data', 'monitor', 'cluster', 'status', 'ocorrencia', 'revertido'].forEach(col => {
+                gridApi.getColumnFilterInstance(col).then(inst => {
+                    if (inst && typeof inst.setModel === 'function') {
+                        inst.setModel(null);
+                    }
+                }).catch(() => {});
+            });
+            document.querySelectorAll('#myGrid input[placeholder="Pesquisar..."], #myGrid .ag-floating-filter-input').forEach(inp => {
+                inp.value = '';
+            });
+            gridApi.onFilterChanged();
+        }
+        aplicarFiltroHubPlanilha();
+        esconderLoading();
+    }, 50);
 }
 
 function filtrarBaseRelatorio(dId, hId, iniId, fimId, contId) {
@@ -730,41 +945,61 @@ function filtrarBaseRelatorio(dId, hId, iniId, fimId, contId) {
 }
 
 function aplicarFiltroUnificadoEstatisticas() {
-    const baseFiltrada = filtrarBaseRelatorio('filtro-data-est', 'filtro-hub-est', 'data-ini-est', 'data-fim-est', 'container-periodo-est');
-    gerarBI(baseFiltrada);
-    limparFiltroMotivoOC();
-    gerarOC(baseFiltrada);
-    gerarGeralOperacao(baseFiltrada);
+    mostrarLoading("Processando estatísticas e gráficos...");
+    setTimeout(() => {
+        try {
+            const baseFiltrada = filtrarBaseRelatorio('filtro-data-est', 'filtro-hub-est', 'data-ini-est', 'data-fim-est', 'container-periodo-est');
+            gerarBI(baseFiltrada);
+            limparFiltroMotivoOC();
+            gerarOC(baseFiltrada);
+            gerarGeralOperacao(baseFiltrada);
+        } finally {
+            esconderLoading();
+        }
+    }, 40);
 }
 
 function aplicarFiltroHubBI() { aplicarFiltroUnificadoEstatisticas(); }
 function aplicarFiltroOC() { aplicarFiltroUnificadoEstatisticas(); }
 
-function carregarRotas() {
+function carregarRotas(silencioso = false) {
+    if (!silencioso) mostrarLoading("Carregando rotas de monitoramento...");
     fetch(`${API_BASE_URL}/rotas`).then(r=>r.json()).then(d=>{
-        if(!d.erro){
-            d.forEach(l => { if (l.monitor) l.monitor = String(l.monitor).toUpperCase().trim(); if(l.cores_customizadas) { try { l.coresIndividuais = JSON.parse(l.cores_customizadas); } catch(e) { l.coresIndividuais = {}; } } });
+        if(!d.erro && Array.isArray(d)){
+            d.forEach(l => {
+                if (l.monitor) l.monitor = String(l.monitor).toUpperCase().trim();
+                if (!l.ocorrencia) l.ocorrencia = "";
+                if (l.cores_customizadas) {
+                    try { l.coresIndividuais = JSON.parse(l.cores_customizadas); } catch(e) { l.coresIndividuais = {}; }
+                }
+            });
             if (currentUser.hubs !== "TODOS") { const mh = currentUser.hubs.toUpperCase().split(',').map(h=>h.trim()); rotasGlobais = d.filter(r => mh.some(h => (r.nome_rota || "").toUpperCase().includes(h))); } else rotasGlobais = d;
             rotasGlobais = ordenarRotasPorSequencia(rotasGlobais);
             if (document.getElementById('home-stat-rotas')) document.getElementById('home-stat-rotas').innerText = rotasGlobais.length;
             popularDropdownsHubMonitoramento(extrairHubs(rotasGlobais, 'nome_rota')); aplicarFiltroHubPlanilha(); inicializarEscala();
             if (rotasBrutas.length > 0) aplicarFiltroUnificadoEstatisticas();
         }
+    }).finally(() => {
+        if (!silencioso) esconderLoading();
     });
 }
 
-function carregarRelatorios() {
+function carregarRelatorios(silencioso = false) {
+    if (!silencioso) mostrarLoading("Carregando base analítica de relatórios...");
     fetch(`${API_BASE_URL}/rotas_brutas`).then(r=>r.json()).then(d=>{
-        if(d.length > 0){
+        if(Array.isArray(d) && d.length > 0){
             if (currentUser.hubs !== "TODOS") { const mh = currentUser.hubs.toUpperCase().split(',').map(h=>h.trim()); rotasBrutas = d.filter(r => mh.some(h => String(r["Nome da Rota"] || "").toUpperCase().includes(h))); } else rotasBrutas = d;
             popularDropdownsHubBI(extrairHubs(rotasBrutas, 'Nome da Rota'));
             popularDropdownsDataBI(extrairDatasBI(rotasBrutas));
             aplicarFiltroUnificadoEstatisticas();
         }
+    }).finally(() => {
+        if (!silencioso) esconderLoading();
     });
 }
 
 function atualizarBadgeSessaoOkta(statusLogin, roboOnline) {
+    gerenciarAlertaCaixaMensagens(statusLogin, roboOnline);
     const badge = document.getElementById('badge-status-sessao-okta');
     if (!badge) return;
     if (!roboOnline || statusLogin === 'OFFLINE') {
@@ -1758,9 +1993,30 @@ document.addEventListener('click', function(e) {
     if (sb && sb.classList.contains("aberta") && !sb.contains(e.target) && !mI.contains(e.target)) { sb.classList.remove("aberta"); document.getElementById("main-content").classList.remove("empurrado"); }
     const uM = document.getElementById('userMenu'); if (uM && uM.classList.contains('show') && !e.target.closest('.user-profile')) uM.classList.remove('show');
 });
-function mudarAba(id, btn){ document.querySelectorAll('.conteudo-aba, .sidebar-btn').forEach(e => e.classList.remove('ativo')); document.getElementById(id).classList.add('ativo'); if (btn) btn.classList.add('ativo'); if(id === 'aba-monitoramento' && gridApi) setTimeout(() => { restaurarEstadoColunas(); atualizarContadorRotas(); }, 50); }
+function mudarAba(id, btn){
+    mostrarLoading("Abrindo tela...");
+    setTimeout(() => {
+        document.querySelectorAll('.conteudo-aba, .sidebar-btn').forEach(e => e.classList.remove('ativo'));
+        document.getElementById(id).classList.add('ativo');
+        if (btn) btn.classList.add('ativo');
+        if(id === 'aba-monitoramento' && gridApi) {
+            setTimeout(() => { restaurarEstadoColunas(); atualizarContadorRotas(); }, 50);
+        }
+        esconderLoading();
+    }, 120);
+}
 function navegarPelosCards(idAba, idBotaoSidebar) { mudarAba(idAba, document.getElementById(idBotaoSidebar)); const sb = document.getElementById("sidebar"); if (sb && sb.classList.contains("aberta")) { sb.classList.remove("aberta"); document.getElementById("main-content").classList.remove("empurrado"); } }
-function mudarSubAba(id, btn){ const aP = btn ? btn.closest('.conteudo-aba') : null; if (aP) { aP.querySelectorAll('.sub-conteudo, .sub-tab-btn').forEach(e => e.classList.remove('ativo')); } else { document.querySelectorAll('.sub-conteudo, .sub-tab-btn').forEach(e => e.classList.remove('ativo')); } document.getElementById(id).classList.add('ativo'); if (btn) btn.classList.add('ativo'); }
+function mudarSubAba(id, btn){
+    mostrarLoading("Carregando visualização...");
+    setTimeout(() => {
+        const aP = btn ? btn.closest('.conteudo-aba') : null;
+        if (aP) { aP.querySelectorAll('.sub-conteudo, .sub-tab-btn').forEach(e => e.classList.remove('ativo')); }
+        else { document.querySelectorAll('.sub-conteudo, .sub-tab-btn').forEach(e => e.classList.remove('ativo')); }
+        document.getElementById(id).classList.add('ativo');
+        if (btn) btn.classList.add('ativo');
+        esconderLoading();
+    }, 100);
+}
 function toggleMenu(){ document.getElementById('sidebar').classList.toggle('aberta'); document.getElementById('main-content').classList.toggle('empurrado'); }
 function abrirModalExportacao(){ const lc = document.getElementById('colunas-export-list'); lc.innerHTML = ''; gridApi.getColumns().forEach(c => { let l = document.createElement('label'); l.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; cursor:pointer; color:#334155;'; l.innerHTML = `<input type="checkbox" value="${c.getColId()}" checked style="width:16px; height:16px; accent-color:#1a237e;"> ${c.getColDef().headerName}`; lc.appendChild(l); }); document.getElementById('exportModal').classList.add('show'); }
 function fecharModalExportacao() { document.getElementById('exportModal').classList.remove('show'); }
@@ -1819,48 +2075,210 @@ function salvarEscalaManual() {
 // ==========================================
 // PAINEL DO ROBÔ (TICKETS)
 // ==========================================
+let tipoTicketSendoEditado = null;
+
 function mudarTipoTicket() {
     const t = document.getElementById('config-tipo').value, a = document.getElementById('config-acao').value; 
-    document.getElementById('painel-programacao').style.display = (t === 'rotina') ? 'block' : 'none'; document.getElementById('painel-opcoes-relatorio').style.display = (a === 'relatorio' && t === 'avulso') ? 'block' : 'none';
+    document.getElementById('painel-programacao').style.display = (t === 'rotina') ? 'block' : 'none';
+    document.getElementById('painel-opcoes-relatorio').style.display = (a === 'relatorio' && t === 'avulso') ? 'block' : 'none';
 }
+
 function toggleDia(d) {
     const ck = document.querySelector(`.chk-dia[value="${d}"]`), ct = document.getElementById(`slots-${d}`);
     if(ck.checked) { ct.style.opacity = '1'; ct.style.pointerEvents = 'auto'; } else { ct.style.opacity = '0.5'; ct.style.pointerEvents = 'none'; }
 }
+
 function adicionarSlot(d) {
     const ct = document.getElementById(`slots-${d}`), nS = document.createElement('div'); nS.className = 'slot-row';
     nS.innerHTML = `<span class="slot-label">Intervalo:</span><input type="number" class="int-val" value="60" min="1"><span class="slot-label">min</span><span class="slot-label" style="margin-left:10px;">De:</span><input type="time" class="ini-val" value="19:00"><span class="slot-label" style="margin-left:10px;">Até:</span><input type="time" class="fim-val" value="21:00"><button onclick="this.parentElement.remove()" style="background: none; border: none; color: #ef4444; font-size: 14px; cursor: pointer; margin-left: auto;">❌</button>`;
     ct.appendChild(nS);
 }
+
+function calcularEstadoPrioridadeTicket(t, idxOriginal) {
+    const ag = new Date(), ds = ["Domingo", "Segunda", "Terca", "Quarta", "Quinta", "Sexta", "Sabado"], hs = ds[ag.getDay()], hA = ag.getHours() * 60 + ag.getMinutes();
+    if (t.tipo === 'avulso') {
+        return {
+            grupoPrioridade: 1,
+            tempoRestanteMs: idxOriginal,
+            htmlStatus: '<span style="color:#d97706;font-weight:bold;font-size:12px;">🚀 Fila Imediata</span>',
+            ativoNaFila: true
+        };
+    }
+    let rs = {};
+    try { rs = typeof t.regras === 'string' ? JSON.parse(t.regras) : t.regras; } catch(e){}
+    if (!rs[hs] || rs[hs].length === 0) {
+        return {
+            grupoPrioridade: 5,
+            tempoRestanteMs: 999999999 + idxOriginal,
+            htmlStatus: '<span style="color:#64748b;font-weight:bold;font-size:12px;">💤 Pausado Hoje</span>',
+            ativoNaFila: false
+        };
+    }
+    let sA = null;
+    for (let s of rs[hs]) {
+        let [hI, mI] = s.ini.split(':').map(Number), [hF, mF] = s.fim.split(':').map(Number);
+        let mIn = hI * 60 + mI, mFm = hF * 60 + mF;
+        if (hA >= mIn && hA <= mFm) { sA = s; break; }
+    }
+    if (!sA) {
+        return {
+            grupoPrioridade: 4,
+            tempoRestanteMs: 888888888 + idxOriginal,
+            htmlStatus: '<span style="color:#64748b;font-weight:bold;font-size:12px;">⏳ Fora do Horário</span>',
+            ativoNaFila: false
+        };
+    }
+    if (!t.ultima_coleta || t.ultima_coleta === 'Aguardando' || t.ultima_coleta === 'None') {
+        return {
+            grupoPrioridade: 2,
+            tempoRestanteMs: idxOriginal,
+            htmlStatus: '<span style="color:#10b981;font-weight:bold;font-size:12px;">⚡ Na fila de Execução</span>',
+            ativoNaFila: true
+        };
+    }
+    let ps = t.ultima_coleta.split(/[- :]/);
+    if (ps.length === 6) {
+        let u = new Date(ps[0], ps[1]-1, ps[2], ps[3], ps[4], ps[5]), pr = new Date(u.getTime() + sA.intervalo * 60000), dM = pr - ag;
+        if (dM <= 0) {
+            return {
+                grupoPrioridade: 2,
+                tempoRestanteMs: dM,
+                htmlStatus: '<span style="color:#10b981;font-weight:bold;font-size:12px;">⚡ Na fila de Execução</span>',
+                ativoNaFila: true
+            };
+        } else {
+            let dm = Math.floor(dM / 60000), dsc = Math.floor((dM % 60000) / 1000);
+            return {
+                grupoPrioridade: 3,
+                tempoRestanteMs: dM,
+                htmlStatus: `<span style="color:#2563eb;font-weight:bold;background:#eff6ff;padding:4px 8px;border-radius:4px;border:1px solid #bfdbfe;font-size:12px;">⏱️ Próxima em ${String(dm).padStart(2, '0')}:${String(dsc).padStart(2, '0')}</span>`,
+                ativoNaFila: true
+            };
+        }
+    }
+    return {
+        grupoPrioridade: 3,
+        tempoRestanteMs: 777777777,
+        htmlStatus: '<span style="color:#64748b;font-size:12px;">Calculando...</span>',
+        ativoNaFila: true
+    };
+}
+
 function carregarTickets(){ 
     fetch(`${API_BASE_URL}/tickets`).then(r=>r.json()).then(d=>{ 
-        ticketsAtivos = d; 
-        document.getElementById('lista-tickets-container').innerHTML = d.map(t=>`<div style="background:#fff;padding:12px;border-left:4px solid #ffd700;margin-bottom:10px;border-radius:6px;box-shadow:0 1px 3px rgba(0,0,0,0.1);display:flex;justify-content:space-between; align-items:center;"><div style="flex: 1;"><b style="color:#1e293b;font-size:14px">${t.hub}</b><br><span style="font-size:11px;color:#64748b">${t.acao.toUpperCase()} | Última: ${t.ultima_coleta}</span></div><div id="count-${t.hub}-${t.acao}" style="text-align:center; min-width: 140px; margin: 0 10px;"></div><div style="display:flex; gap:8px; align-items:center;"><button onclick="editarTicket('${t.hub}', '${t.acao}')" style="background:#e0f2fe;color:#0284c7;border:1px solid #bae6fd;border-radius:4px;cursor:pointer;font-weight:bold;padding:4px 8px">✏️ Editar</button><button onclick="removerTicket('${t.hub}', '${t.acao}')" style="background:#fee2e2;color:#ef4444;border:1px solid #fecaca;border-radius:4px;cursor:pointer;font-weight:bold;padding:4px 8px">🗑️ Excluir</button></div></div>`).join('') || '<div style="color:#888;font-style:italic">Nenhum ticket na fila.</div>'; 
-        atualizarCountdowns(); 
+        ticketsAtivos = d || [];
+        renderizarFilaTickets();
     }); 
 }
+
+function renderizarFilaTickets() {
+    const container = document.getElementById('lista-tickets-container');
+    if (!container) return;
+    if (!ticketsAtivos || ticketsAtivos.length === 0) {
+        container.innerHTML = '<div style="color:#888;font-style:italic">Nenhum ticket na fila.</div>';
+        return;
+    }
+
+    const avaliados = ticketsAtivos.map((t, idx) => ({
+        ticket: t,
+        idxOriginal: idx,
+        info: calcularEstadoPrioridadeTicket(t, idx)
+    }));
+
+    // Ordena pela ordem real de execução
+    avaliados.sort((a, b) => {
+        if (a.info.grupoPrioridade !== b.info.grupoPrioridade) return a.info.grupoPrioridade - b.info.grupoPrioridade;
+        return a.info.tempoRestanteMs - b.info.tempoRestanteMs;
+    });
+
+    let contadorOrdem = 1;
+    container.innerHTML = avaliados.map(item => {
+        const t = item.ticket;
+        const idUnico = `${t.hub}-${t.acao}-${t.tipo}`;
+        const isAvulso = t.tipo === 'avulso';
+        const corBorda = isAvulso ? '#f97316' : '#ffd700';
+        const badgeTipo = isAvulso
+            ? `<span style="background:#ffedd5;color:#c2410c;border:1px solid #fed7aa;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:800;margin-left:6px;">🚀 AVULSO</span>`
+            : `<span style="background:#e0e7ff;color:#1d4ed8;border:1px solid #c7d2fe;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:800;margin-left:6px;">⏱️ ROTINA</span>`;
+
+        let badgeOrdem = '';
+        if (item.info.ativoNaFila) {
+            const pos = contadorOrdem++;
+            const bgOrdem = pos === 1 ? '#dcfce7' : '#f1f5f9';
+            const corOrdem = pos === 1 ? '#15803d' : '#334155';
+            const bordaOrdem = pos === 1 ? '#86efac' : '#cbd5e1';
+            badgeOrdem = `<span id="ordem-${idUnico}" style="background:${bgOrdem};color:${corOrdem};border:1px solid ${bordaOrdem};padding:3px 8px;border-radius:12px;font-size:11px;font-weight:800;white-space:nowrap;">${pos}º na Fila</span>`;
+        } else {
+            badgeOrdem = `<span id="ordem-${idUnico}" style="background:#f8fafc;color:#94a3b8;border:1px solid #e2e8f0;padding:3px 8px;border-radius:12px;font-size:11px;font-weight:700;white-space:nowrap;">—</span>`;
+        }
+
+        return `
+            <div style="background:#fff;padding:12px;border-left:4px solid ${corBorda};margin-bottom:10px;border-radius:6px;box-shadow:0 1px 3px rgba(0,0,0,0.1);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+                <div style="flex: 1; min-width: 170px;">
+                    <div style="display:flex;align-items:center;">
+                        <b style="color:#1e293b;font-size:14px">${t.hub}</b>
+                        ${badgeTipo}
+                    </div>
+                    <span style="font-size:11px;color:#64748b">${t.acao.toUpperCase()} | Última: ${t.ultima_coleta}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;margin:0 8px;">
+                    <div id="count-${idUnico}" style="text-align:center;min-width:135px;">${item.info.htmlStatus}</div>
+                    ${badgeOrdem}
+                </div>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <button onclick="editarTicket('${t.hub}', '${t.acao}', '${t.tipo}')" style="background:#e0f2fe;color:#0284c7;border:1px solid #bae6fd;border-radius:4px;cursor:pointer;font-weight:bold;padding:4px 8px">✏️ Editar</button>
+                    <button onclick="removerTicket('${t.hub}', '${t.acao}', '${t.tipo}')" style="background:#fee2e2;color:#ef4444;border:1px solid #fecaca;border-radius:4px;cursor:pointer;font-weight:bold;padding:4px 8px">🗑️ Excluir</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
 function atualizarCountdowns() {
-    const ag = new Date(), ds = ["Domingo", "Segunda", "Terca", "Quarta", "Quinta", "Sexta", "Sabado"], hs = ds[ag.getDay()], hA = ag.getHours() * 60 + ag.getMinutes(); 
-    ticketsAtivos.forEach(t => {
-        const el = document.getElementById(`count-${t.hub}-${t.acao}`); if (!el) return;
-        if (t.tipo === 'avulso') { el.innerHTML = '<span style="color:#d97706;font-weight:bold;font-size:12px;">🚀 Fila Imediata</span>'; return; }
-        let rs = {}; try { rs = typeof t.regras === 'string' ? JSON.parse(t.regras) : t.regras; } catch(e){}
-        if (!rs[hs] || rs[hs].length === 0) { el.innerHTML = '<span style="color:#64748b;font-weight:bold;font-size:12px;">💤 Pausado Hoje</span>'; return; }
-        let sA = null;
-        for (let s of rs[hs]) { let [hI, mI] = s.ini.split(':').map(Number), [hF, mF] = s.fim.split(':').map(Number), mIn = hI * 60 + mI, mFm = hF * 60 + mF; if (hA >= mIn && hA <= mFm) { sA = s; break; } }
-        if (!sA) { el.innerHTML = '<span style="color:#64748b;font-weight:bold;font-size:12px;">⏳ Fora do Horário</span>'; return; }
-        if (!t.ultima_coleta || t.ultima_coleta === 'Aguardando' || t.ultima_coleta === 'None') { el.innerHTML = '<span style="color:#10b981;font-weight:bold;font-size:12px;">⚡ Na fila de Execução</span>'; return; }
-        let ps = t.ultima_coleta.split(/[- :]/);
-        if (ps.length === 6) {
-            let u = new Date(ps[0], ps[1]-1, ps[2], ps[3], ps[4], ps[5]), pr = new Date(u.getTime() + sA.intervalo * 60000), dM = pr - ag;
-            if (dM <= 0) el.innerHTML = '<span style="color:#10b981;font-weight:bold;font-size:12px;">⚡ Na fila de Execução</span>';
-            else { let dm = Math.floor(dM / 60000), dsc = Math.floor((dM % 60000) / 1000); el.innerHTML = `<span style="color:#2563eb;font-weight:bold;background:#eff6ff;padding:4px 8px;border-radius:4px;border:1px solid #bfdbfe;font-size:12px;">⏱️ Próxima em ${String(dm).padStart(2, '0')}:${String(dsc).padStart(2, '0')}</span>`; }
-        } else el.innerHTML = '<span style="color:#64748b;font-size:12px;">Calculando...</span>';
+    if (!ticketsAtivos || ticketsAtivos.length === 0) return;
+    const avaliados = ticketsAtivos.map((t, idx) => ({
+        ticket: t,
+        idxOriginal: idx,
+        info: calcularEstadoPrioridadeTicket(t, idx)
+    }));
+
+    avaliados.sort((a, b) => {
+        if (a.info.grupoPrioridade !== b.info.grupoPrioridade) return a.info.grupoPrioridade - b.info.grupoPrioridade;
+        return a.info.tempoRestanteMs - b.info.tempoRestanteMs;
+    });
+
+    let contadorOrdem = 1;
+    avaliados.forEach(item => {
+        const t = item.ticket;
+        const idUnico = `${t.hub}-${t.acao}-${t.tipo}`;
+        const elCount = document.getElementById(`count-${idUnico}`);
+        const elOrdem = document.getElementById(`ordem-${idUnico}`);
+        if (elCount) elCount.innerHTML = item.info.htmlStatus;
+        if (elOrdem) {
+            if (item.info.ativoNaFila) {
+                const pos = contadorOrdem++;
+                elOrdem.innerText = `${pos}º na Fila`;
+                elOrdem.style.background = pos === 1 ? '#dcfce7' : '#f1f5f9';
+                elOrdem.style.color = pos === 1 ? '#15803d' : '#334155';
+                elOrdem.style.borderColor = pos === 1 ? '#86efac' : '#cbd5e1';
+            } else {
+                elOrdem.innerText = '—';
+                elOrdem.style.background = '#f8fafc';
+                elOrdem.style.color = '#94a3b8';
+                elOrdem.style.borderColor = '#e2e8f0';
+            }
+        }
     });
 }
-function editarTicket(h, a) {
-    const t = ticketsAtivos.find(x => x.hub === h && x.acao === a); if(!t) return;
-    document.getElementById('config-hub').value = t.hub; document.getElementById('config-acao').value = t.acao; document.getElementById('config-tipo').value = t.tipo; mudarTipoTicket(); 
+
+function editarTicket(h, a, tipo) {
+    const t = ticketsAtivos.find(x => x.hub === h && x.acao === a && (!tipo || x.tipo === tipo));
+    if(!t) return;
+    tipoTicketSendoEditado = t.tipo;
+    document.getElementById('config-hub').value = t.hub;
+    document.getElementById('config-acao').value = t.acao;
+    document.getElementById('config-tipo').value = t.tipo;
+    mudarTipoTicket(); 
     let rs = {}; try { rs = typeof t.regras === 'string' ? JSON.parse(t.regras) : t.regras; } catch(e){}
     if (t.acao === 'relatorio' && rs.exportar_local) document.getElementById('config-destino').value = rs.exportar_local;
     if (t.tipo === 'rotina') {
@@ -1879,20 +2297,29 @@ function editarTicket(h, a) {
             }
         });
     }
-    document.getElementById('modal-overlay-config').style.display = 'block'; document.getElementById('painel-config-robo').classList.add('panel-as-modal');
-    document.getElementById('titulo-config-robo').innerHTML = `✏️ Editando Rotina: <span style="color:#d97706;">${t.hub} - ${t.acao.toUpperCase()}</span>`;
-    document.getElementById('btn-salvar-form').innerText = '💾 Atualizar Rotina'; document.getElementById('btn-cancelar-edicao').style.display = 'flex';
+    document.getElementById('modal-overlay-config').style.display = 'block';
+    document.getElementById('painel-config-robo').classList.add('panel-as-modal');
+    document.getElementById('titulo-config-robo').innerHTML = `✏️ Editando (${t.tipo.toUpperCase()}): <span style="color:#d97706;">${t.hub} - ${t.acao.toUpperCase()}</span>`;
+    document.getElementById('btn-salvar-form').innerText = '💾 Atualizar Configuração';
+    document.getElementById('btn-cancelar-edicao').style.display = 'flex';
 }
+
 function fecharEdicaoTicket() {
-    document.getElementById('modal-overlay-config').style.display = 'none'; document.getElementById('painel-config-robo').classList.remove('panel-as-modal');
-    document.getElementById('titulo-config-robo').innerHTML = '⚙️ Configurar Nova Rotina'; document.getElementById('btn-salvar-form').innerText = '💾 Salvar Configuração do HUB';
+    tipoTicketSendoEditado = null;
+    document.getElementById('modal-overlay-config').style.display = 'none';
+    document.getElementById('painel-config-robo').classList.remove('panel-as-modal');
+    document.getElementById('titulo-config-robo').innerHTML = '⚙️ Configurar Nova Rotina';
+    document.getElementById('btn-salvar-form').innerText = '💾 Salvar Configuração do HUB';
     document.getElementById('btn-cancelar-edicao').style.display = 'none';
     if (!document.getElementById('config-hub').hasAttribute('readonly')) {
         document.getElementById('config-hub').value = '';
     }
 }
+
 function salvarConfiguracao(){ 
-    let h = document.getElementById('config-hub').value.toUpperCase().trim(), a = document.getElementById('config-acao').value, t = document.getElementById('config-tipo').value;
+    let h = document.getElementById('config-hub').value.toUpperCase().trim(),
+        a = document.getElementById('config-acao').value,
+        t = document.getElementById('config-tipo').value;
     if (!h) h = "TODOS";
 
     let rs = { exportar_local: document.getElementById('config-destino').value };
@@ -1907,6 +2334,17 @@ function salvarConfiguracao(){
         });
         if (Object.keys(rs).length === 1) return alert("Ative e adicione pelo menos um horário em um dia da semana.");
     }
-    fetch(`${API_BASE_URL}/add_ticket`,{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ hub: h, tipo: t, acao: a, regras: rs }) }).then(() => { fecharEdicaoTicket(); carregarTickets(); }); 
+    fetch(`${API_BASE_URL}/add_ticket`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ hub: h, tipo: t, tipo_original: tipoTicketSendoEditado, acao: a, regras: rs })
+    }).then(() => { fecharEdicaoTicket(); carregarTickets(); }); 
 }
-function removerTicket(h, a) { if(confirm(`Remover a tarefa de ${a.toUpperCase()} do HUB ${h}?`)) fetch(`${API_BASE_URL}/delete_ticket/${h}/${a}`, { method: 'DELETE' }).then(() => carregarTickets()); }
+
+function removerTicket(h, a, tipo) {
+    const descTipo = tipo ? ` (${tipo.toUpperCase()})` : '';
+    if(confirm(`Remover a tarefa de ${a.toUpperCase()}${descTipo} do HUB ${h}?`)) {
+        const url = tipo ? `${API_BASE_URL}/delete_ticket/${h}/${a}/${tipo}` : `${API_BASE_URL}/delete_ticket/${h}/${a}`;
+        fetch(url, { method: 'DELETE' }).then(() => carregarTickets());
+    }
+}

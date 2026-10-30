@@ -214,45 +214,38 @@ async def salvar_edicao_ocorrencia(request: Request):
 @app.get("/rotas")
 def puxar_rotas():
     try:
-        try:
-            with motor_db.begin() as conn:
-                conn.execute(text("UPDATE rotas_monitoramento SET nome_rota = 'AVULSA_ANTIGA' WHERE UPPER(nome_rota) LIKE '%NÃO PLANEJADA%' OR UPPER(nome_rota) LIKE '%NAO PLANEJADA%'"))
-        except Exception: 
-            pass
-        
+        insp = inspect(motor_db)
+        if not insp.has_table('rotas_monitoramento'):
+            return []
+
         df = pd.read_sql_table('rotas_monitoramento', con=motor_db).fillna("")
-        if 'monitor' in df.columns:
-            df['monitor'] = df['monitor'].astype(str).str.upper().str.strip()
+        if df.empty:
+            return []
 
-        alterou_banco = False
-        for idx, row in df.iterrows():
-            st_atual = str(row.get('status', '')).strip().upper()
-            try:
-                est_num = int(float(re.sub(r'[^\d.-]', '', str(row.get('estimado_total', '0'))) or 0))
-            except Exception:
-                est_num = 0
-            try:
-                col_num = int(float(re.sub(r'[^\d.-]', '', str(row.get('coletado_geral', '0'))) or 0))
-            except Exception:
-                col_num = 0
+        for col_obrigatoria in ['monitor', 'ocorrencia', 'revertido', 'observacoes', 'restante', 'status_manual']:
+            if col_obrigatoria not in df.columns:
+                df[col_obrigatoria] = ""
 
-            df.at[idx, 'restante'] = str(est_num - col_num)
+        df['monitor'] = df['monitor'].astype(str).str.upper().str.strip()
 
-            novo_st = st_atual
-            if "SEM INÍCIO" in st_atual or "SEM INICIO" in st_atual:
-                novo_st = "PENDENTE DE LOGIN"
-            elif "ANDAMENTO" in st_atual or st_atual in ["INÍCIO", "INICIO"]:
-                novo_st = "LOGADO"
-            elif "CONCLU" in st_atual:
-                novo_st = "FINALIZADA" if col_num > 0 else "CANCELADA"
-            elif st_atual == "FINALIZADO":
-                novo_st = "FINALIZADA"
+        # Cálculo vetorizado ultrarrápido de pacotes restantes
+        est_series = pd.to_numeric(df['estimado_total'].astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce').fillna(0).astype(int)
+        col_series = pd.to_numeric(df['coletado_geral'].astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce').fillna(0).astype(int)
+        df['restante'] = (est_series - col_series).astype(str)
 
-            if novo_st != st_atual:
-                df.at[idx, 'status'] = novo_st
-                alterou_banco = True
+        # Padronização rápida de status caso haja algum texto antigo do Meli
+        st_upper = df['status'].astype(str).str.strip().str.upper()
+        mask_sem_ini = st_upper.str.contains("SEM INÍCIO|SEM INICIO", regex=True, na=False)
+        mask_andamento = st_upper.str.contains("ANDAMENTO", na=False) | st_upper.isin(["INÍCIO", "INICIO"])
+        mask_concluida = st_upper.str.contains("CONCLU", na=False)
+        mask_finalizado = st_upper == "FINALIZADO"
 
-        if alterou_banco:
+        if mask_sem_ini.any() or mask_andamento.any() or mask_concluida.any() or mask_finalizado.any():
+            df.loc[mask_sem_ini, 'status'] = "PENDENTE DE LOGIN"
+            df.loc[mask_andamento, 'status'] = "LOGADO"
+            df.loc[mask_concluida & (col_series > 0), 'status'] = "FINALIZADA"
+            df.loc[mask_concluida & (col_series <= 0), 'status'] = "CANCELADA"
+            df.loc[mask_finalizado, 'status'] = "FINALIZADA"
             try:
                 df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
             except Exception:
@@ -319,6 +312,8 @@ async def adicionar_ticket(request: Request):
     dados = await request.json()
     hub = dados.get("hub", "TODOS").upper().strip()
     acao = dados.get("acao", "monitoramento")
+    tipo = dados.get("tipo", "avulso")
+    tipo_original = dados.get("tipo_original", None)
     if not hub:
         hub = "TODOS"
         
@@ -326,24 +321,46 @@ async def adicionar_ticket(request: Request):
         try:
             with motor_db.connect() as conn:
                 conn.execute(text("SELECT 1 FROM tickets_robo LIMIT 1"))
-        except:
+        except Exception:
             df = pd.DataFrame(columns=["hub", "status", "tipo", "acao", "regras", "ultima_coleta"])
             df.to_sql('tickets_robo', con=motor_db, if_exists='replace', index=False)
 
         with motor_db.begin() as conn:
-            conn.execute(text("DELETE FROM tickets_robo WHERE hub = :h AND acao = :a"), {"h": hub, "a": acao})
+            # Se estava editando um ticket existente e mudou o tipo dele, remove o original
+            if tipo_original and tipo_original != tipo:
+                conn.execute(
+                    text("DELETE FROM tickets_robo WHERE hub = :h AND acao = :a AND tipo = :to"),
+                    {"h": hub, "a": acao, "to": tipo_original}
+                )
+            # Remove apenas o ticket do MESMO tipo (preserva a Rotina quando criar um Avulso e vice-versa!)
+            conn.execute(
+                text("DELETE FROM tickets_robo WHERE hub = :h AND acao = :a AND tipo = :t"),
+                {"h": hub, "a": acao, "t": tipo}
+            )
             conn.execute(text("""
                 INSERT INTO tickets_robo (hub, status, tipo, acao, regras, ultima_coleta) 
                 VALUES (:h, 'ATIVO', :t, :a, :r, 'Aguardando')
             """), {
                 "h": hub, 
-                "t": dados.get("tipo", "avulso"), 
+                "t": tipo, 
                 "a": acao, 
                 "r": json.dumps(dados.get("regras", {}))
             })
-        return {"sucesso": True, "mensagem": f"HUB {hub} salvo!"}
+        return {"sucesso": True, "mensagem": f"HUB {hub} ({tipo}) salvo!"}
     except Exception as e: 
         return {"erro": str(e)}
+
+@app.delete("/delete_ticket/{hub}/{acao}/{tipo}")
+def deletar_ticket_com_tipo(hub: str, acao: str, tipo: str):
+    try:
+        with motor_db.begin() as conn:
+            conn.execute(
+                text("DELETE FROM tickets_robo WHERE hub = :h AND acao = :a AND tipo = :t"),
+                {"h": hub, "a": acao, "t": tipo}
+            )
+        return {"sucesso": True}
+    except Exception: 
+        return {}
 
 @app.delete("/delete_ticket/{hub}/{acao}")
 def deletar_ticket(hub: str, acao: str):
@@ -353,7 +370,7 @@ def deletar_ticket(hub: str, acao: str):
         return {"sucesso": True}
     except Exception: 
         return {}
-
+    
 # ==========================================
 # TELEMETRIA, LOGS E CONTROLO OKTA DO ROBÔ
 # ==========================================
@@ -497,6 +514,20 @@ async def atualizar_rev(request: Request):
         return {"sucesso": True}
     except Exception: 
         return {}
+
+@app.post("/atualizar_ocorrencia")
+async def atualizar_ocorrencia_rota(request: Request):
+    dados = await request.json()
+    try:
+        df = pd.read_sql_table('rotas_monitoramento', con=motor_db)
+        df['id_rota'] = df['id_rota'].astype(str)
+        if 'ocorrencia' not in df.columns: 
+            df['ocorrencia'] = ""
+        df.loc[df['id_rota'] == str(dados.get("id_rota")), 'ocorrencia'] = str(dados.get("ocorrencia", "")).strip()
+        df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
+        return {"sucesso": True}
+    except Exception as e: 
+        return {"sucesso": False, "erro": str(e)}
 
 @app.post("/atualizar_status")
 async def atualizar_stat(request: Request):
