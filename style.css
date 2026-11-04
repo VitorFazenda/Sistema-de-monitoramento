@@ -716,3 +716,21 @@ html, body { height: 100%; margin: 0; padding: 0; font-family: 'Segoe UI', Tahom
     gap: 10px;
     flex-wrap: wrap;
 }
+/* ========================================== */
+/* STATUS SIM PARCIAL (COR LARANJA)           */
+/* ========================================== */
+.oc-rev-select.sim-parcial {
+    background: #ffedd5;
+    color: #c2410c;
+    border-color: #fb923c;
+}
+
+.go-rev-badge.sim-parcial {
+    background: #ffedd5;
+    color: #c2410c;
+    border: 1px solid #fb923c;
+}
+
+.go-pivot-table tr.row-revertido-parcial td {
+    background: #fff7ed;
+}

@@ -930,8 +930,14 @@ function extrairHubs(dados, cNome) {
     dados.forEach(r => { let n = r[cNome]; if (n) { let p = String(n).split('_'); let px = p[0].toUpperCase().trim(); if (px && !px.includes("NÃO PLANEJADA") && !px.includes("NAO PLANEJADA") && !px.includes("AVULSA")) h.add(px); } });
     return Array.from(h).sort();
 }
-function extrairDatasBI(dados) { let dSet = new Set(); dados.forEach(r => { let d = r['Data da rota'] || r['Data']; if (d) dSet.add(String(d).trim()); }); return Array.from(dSet).sort().reverse(); }
-
+function extrairDatasBI(dados) {
+    let dSet = new Set();
+    dados.forEach(r => {
+        let d = r['Data da rota'] || r['Data'];
+        if (d) dSet.add(String(d).trim());
+    });
+    return Array.from(dSet).sort((a, b) => comparadorDataBR(b, a));
+}
 function populate(id, opts, def) { let el = document.getElementById(id); if(!el) return; let v = el.value; el.innerHTML = opts; if(v && v !== def && Array.from(el.options).some(o => o.value === v)) el.value = v; else el.value = def; }
 
 function popularDropdownsHubMonitoramento(hubs) {
@@ -1557,32 +1563,38 @@ function exportarExcelBI() {
 }
 
 // ==========================================
-// MONITOR DE OCORRÊNCIAS (OC) - COM REVERTIDO E OBSERVAÇÕES EDITÁVEIS
+// MONITOR DE OCORRÊNCIAS
 // ==========================================
-function obterEdicaoOcorrencia(routeId, stop, motivo, idx) {
-    const chCompleta = gerarChaveOcorrencia(routeId, stop, motivo, idx);
+let rotasExpandidasOC = new Set();
+
+function obterEdicaoOcorrencia(routeId, stop, motivo, seqParada) {
+    const chUnica = `${String(routeId || '').trim()}||${String(stop || '').trim()}||${String(motivo || '').trim()}||#${seqParada}`;
     const chBase = gerarChaveRotaParadaMotivo(routeId, stop, motivo);
 
-    if (controleOcorrencias[chCompleta]) return controleOcorrencias[chCompleta];
-    if (controleOcorrencias[chBase]) return controleOcorrencias[chBase];
+    if (controleOcorrencias[chUnica]) return { ...controleOcorrencias[chUnica], chaveUsada: chUnica };
+    if (seqParada === 1 && controleOcorrencias[chBase]) return { ...controleOcorrencias[chBase], chaveUsada: chUnica };
 
     const rotaPlanilha = rotasGlobais.find(r => String(r.id_rota).trim() === String(routeId).trim());
     if (rotaPlanilha && rotaPlanilha.revertido) {
         const rev = String(rotaPlanilha.revertido).toUpperCase().trim();
         if (rev === 'SIM' || rev === 'NÃO' || rev === 'NAO') {
-            return { revertido: rev === 'NAO' ? 'NÃO' : rev, observacao: '' };
+            return { revertido: rev === 'NAO' ? 'NÃO' : rev, observacao: '', chaveUsada: chUnica };
         }
     }
-    return { revertido: 'NÃO', observacao: '' };
+    return { revertido: 'NÃO', observacao: '', chaveUsada: chUnica };
 }
 
 function gerarOC(rawRows) {
     if (!rawRows || rawRows.length === 0) {
-        document.getElementById('oc-kpis').innerHTML = ''; document.getElementById('oc-tbl-pivot').querySelector('tbody').innerHTML = ''; document.getElementById('oc-tbl-details').querySelector('tbody').innerHTML = '';
-        OC_DATA = { raw: [], rawWithEmpty: [], pivot: [], pivotWithEmpty: [], details: [], totalParadas: 0, totalOcorrencias: 0, pacotesLeftBehind: 0, topMotive: "" }; return;
+        document.getElementById('oc-kpis').innerHTML = '';
+        document.getElementById('oc-tbl-pivot').querySelector('tbody').innerHTML = '';
+        document.getElementById('oc-tbl-details').querySelector('tbody').innerHTML = '';
+        OC_DATA = { raw: [], rawWithEmpty: [], pivot: [], pivotWithEmpty: [], details: [], totalParadas: 0, totalOcorrencias: 0, pacotesLeftBehind: 0, topMotive: "" };
+        return;
     }
 
-    const rows = rawRows.map(normalizeBPObj); const cm = colMapBI(rows[0]);
+    const rows = rawRows.map(normalizeBPObj);
+    const cm = colMapBI(rows[0]);
     const getVal = (r, keys) => { for (let k of keys) { if (r[k] !== undefined) return r[k]; } return ""; };
 
     let processedOccurrences = [];
@@ -1591,6 +1603,7 @@ function gerarOC(rawRows) {
     let leftBehindTotal = 0;
     let motiveCountOcc = {};
     let motiveCountAll = {};
+    let contadorSeqParada = {};
 
     rows.forEach((r, idx) => {
         totalP++;
@@ -1611,12 +1624,15 @@ function gerarOC(rawRows) {
 
         const rId = String(r[cm.routeId] || '').trim();
         const stp = String(r[cm.stop] || '').trim();
-        const edicao = obterEdicaoOcorrencia(rId, stp, motivoOficial, idx);
-        const chaveBase = gerarChaveRotaParadaMotivo(rId, stp, motivoOficial);
+        const chBaseContagem = gerarChaveRotaParadaMotivo(rId, stp, motivoOficial);
+        contadorSeqParada[chBaseContagem] = (contadorSeqParada[chBaseContagem] || 0) + 1;
+        const seqAtual = contadorSeqParada[chBaseContagem];
+
+        const edicao = obterEdicaoOcorrencia(rId, stp, motivoOficial, seqAtual);
 
         const itemRow = {
             idx: idx,
-            chave: chaveBase,
+            chave: edicao.chaveUsada,
             routeId: rId,
             routeName: String(r[cm.routeName] || '').trim(),
             driverId: String(r[cm.driverId] || '').trim(),
@@ -1657,7 +1673,9 @@ function gerarOC(rawRows) {
         topMotive: pivotOcc.length > 0 ? pivotOcc[0].motivo : "Nenhum registo"
     };
 
-    renderOCKPIs(); renderOCPivot(); renderOCDetails();
+    renderOCKPIs();
+    renderOCPivot();
+    renderOCDetails();
 }
 
 function renderOCKPIs() {
@@ -1686,9 +1704,6 @@ function renderOCPivot() {
     tb.innerHTML = html || `<tr><td colspan="2" style="text-align:center; color:#8a9abc; padding: 20px;">Nenhuma ocorrência encontrada.</td></tr>`;
     document.getElementById('oc-footer-pivot').innerText = `Total Geral: ${totG.toLocaleString('pt-BR')}`;
 }
-
-// Controla quais rotas estão com a caixa de paradas aberta no Monitor de Ocorrências
-let rotasExpandidasOC = new Set();
 
 function toggleParadasRotaOC(chaveGrupo) {
     if (rotasExpandidasOC.has(chaveGrupo)) {
@@ -1724,7 +1739,7 @@ function renderOCDetails() {
     const tb = document.getElementById('oc-tbl-details').querySelector('tbody');
     const podeEditar = !currentUser || currentUser.cargo !== 'MONITOR GRAU 1';
 
-    // MODO 1: Agrupado por Nome da Rota (com caixa expansível de paradas ao clicar)
+    // MODO 1: Agrupado por Nome da Rota (com SIM Laranja se parcial e SIM Verde se total)
     if (mostrarRotas) {
         const gruposMap = new Map();
         rows.forEach(d => {
@@ -1749,9 +1764,12 @@ function renderOCDetails() {
 
         const listaGrupos = Array.from(gruposMap.values());
         let html = listaGrupos.slice(0, 400).map(g => {
-            const todasSim = g.itens.length > 0 && g.itens.every(x => String(x.revertido || 'NÃO').toUpperCase() === 'SIM');
-            const algumaSim = g.itens.some(x => String(x.revertido || 'NÃO').toUpperCase() === 'SIM');
-            const isSim = todasSim || algumaSim;
+            const qtdSim = g.itens.filter(x => String(x.revertido || 'NÃO').toUpperCase() === 'SIM').length;
+            const todasSim = g.itens.length > 0 && qtdSim === g.itens.length;
+            const algumaSim = qtdSim > 0;
+            const isParcial = algumaSim && !todasSim;
+
+            const classeCorSelect = todasSim ? 'sim' : (isParcial ? 'sim-parcial' : 'nao');
             const obsUnica = g.itens.find(x => x.observacao)?.observacao || '';
             const obsEscapada = String(obsUnica).replace(/"/g, '&quot;');
             const detUnico = g.itens.find(x => x.detalhes && x.detalhes !== 'nan' && x.detalhes !== 'None')?.detalhes || '<span style="color:#cbd5e1">-</span>';
@@ -1763,7 +1781,7 @@ function renderOCDetails() {
                     <td style="font-family:monospace;font-size:11px;color:#4a5a7a">${g.routeId}</td>
                     <td style="font-family:monospace;color:#0d1b3e;font-weight:700">${g.driverId}</td>
                     <td>
-                        <div class="oc-rota-click" onclick="toggleParadasRotaOC('${chaveEsc}')" title="Clique para ver as paradas desta rota">
+                        <div class="oc-rota-click" onclick="toggleParadasRotaOC('${chaveEsc}')" title="Clique para abrir/fechar as paradas desta rota">
                             <span>${estaAberta ? '▼' : '▶'}</span>
                             <span>${g.routeName}</span>
                             <span style="background:#0284c7;color:#fff;padding:1px 6px;border-radius:10px;font-size:10px;">${g.itens.length} parada${g.itens.length !== 1 ? 's' : ''}</span>
@@ -1773,9 +1791,9 @@ function renderOCDetails() {
                     <td style="text-align: center; font-weight:700;">${g.est}</td>
                     <td style="text-align: center;">${g.col}</td>
                     <td style="text-align: center;">
-                        <select class="oc-rev-select ${isSim ? 'sim' : 'nao'}" ${podeEditar ? '' : 'disabled'} onchange="aoMudarRevertidoRotaGrupoOC('${chaveEsc}', this.value, this)">
-                            <option value="NÃO" ${!isSim ? 'selected' : ''}>NÃO</option>
-                            <option value="SIM" ${isSim ? 'selected' : ''}>SIM</option>
+                        <select class="oc-rev-select ${classeCorSelect}" title="${isParcial ? 'Reversão Parcial (alguns pontos SIM e outros NÃO)' : ''}" ${podeEditar ? '' : 'disabled'} onchange="aoMudarRevertidoRotaGrupoOC('${chaveEsc}', this.value, this)">
+                            <option value="NÃO" ${!algumaSim ? 'selected' : ''}>NÃO</option>
+                            <option value="SIM" ${algumaSim ? 'selected' : ''}>SIM</option>
                         </select>
                     </td>
                     <td>
@@ -1930,9 +1948,10 @@ function aoMudarRevertidoOC(idx, novoValor, selectEl) {
     const item = (OC_DATA.rawWithEmpty || []).find(x => x.idx === idx);
     if (!item) return;
 
+    // Atualiza apenas a parada específica clicada (usando o idx e a chave única da parada)
     item.revertido = valLimpo;
     (OC_DATA.raw || []).forEach(x => { if (x.idx === idx || x.chave === item.chave) x.revertido = valLimpo; });
-    (OC_DATA.rawWithEmpty || []).forEach(x => { if (x.chave === item.chave) x.revertido = valLimpo; });
+    (OC_DATA.rawWithEmpty || []).forEach(x => { if (x.idx === idx || x.chave === item.chave) x.revertido = valLimpo; });
 
     controleOcorrencias[item.chave] = {
         id_rota: item.routeId,
@@ -1942,6 +1961,11 @@ function aoMudarRevertidoOC(idx, novoValor, selectEl) {
 
     const baseFiltrada = filtrarBaseRelatorio('filtro-data-est', 'filtro-hub-est', 'data-ini-est', 'data-fim-est', 'container-periodo-est');
     gerarGeralOperacao(baseFiltrada);
+
+    // Se estiver no modo "Mostrar nome de rotas", atualiza a linha principal da rota para SIM Laranja / Verde / Vermelho na hora!
+    if (document.getElementById('oc-chk-mostrar-rotas')?.checked) {
+        renderOCDetails();
+    }
 
     fetch(`${API_BASE_URL}/salvar_edicao_ocorrencia`, {
         method: 'POST',
@@ -1962,7 +1986,7 @@ function aoMudarObservacaoOC(idx, novaObs) {
 
     item.observacao = obsLimpa;
     (OC_DATA.raw || []).forEach(x => { if (x.idx === idx || x.chave === item.chave) x.observacao = obsLimpa; });
-    (OC_DATA.rawWithEmpty || []).forEach(x => { if (x.chave === item.chave) x.observacao = obsLimpa; });
+    (OC_DATA.rawWithEmpty || []).forEach(x => { if (x.idx === idx || x.chave === item.chave) x.observacao = obsLimpa; });
 
     controleOcorrencias[item.chave] = {
         id_rota: item.routeId,
@@ -2089,16 +2113,19 @@ function gerarGeralOperacao(rawRows) {
                 routeName: occ.routeName || rId,
                 driverId: occ.driverId || '-',
                 est: 0,
+                estRevertido: 0,
                 col: 0,
                 paradas: 0,
-                algumaRevertida: false
+                paradasRevertidas: 0
             };
         }
-        mapaMotivos[motivo].rotasMap[rId].est += pctEst;
-        mapaMotivos[motivo].rotasMap[rId].col += occ.col || 0;
-        mapaMotivos[motivo].rotasMap[rId].paradas += 1;
+        const rMotivo = mapaMotivos[motivo].rotasMap[rId];
+        rMotivo.est += pctEst;
+        rMotivo.col += occ.col || 0;
+        rMotivo.paradas += 1;
         if (isOccRev) {
-            mapaMotivos[motivo].rotasMap[rId].algumaRevertida = true;
+            rMotivo.estRevertido += pctEst;
+            rMotivo.paradasRevertidas += 1;
         }
     });
 
@@ -2107,15 +2134,22 @@ function gerarGeralOperacao(rawRows) {
         totalOfensoresBruto += rt.est;
     });
 
-    // Subtrai os pacotes revertidos da conta total de ofensores
+    // Subtrai os pacotes revertidos apenas no consolidado de ofensores
     const totalOfensoresLiquido = Math.max(0, totalOfensoresBruto - totalRevertidosPcts);
 
     const motivosAgrupados = Object.values(mapaMotivos).map(m => {
         const listaRotas = Object.values(m.rotasMap).map(r => {
-            return { ...r, revertido: r.algumaRevertida ? 'SIM' : 'NÃO' };
+            const todasParadasRev = r.paradas > 0 && r.paradasRevertidas === r.paradas;
+            const algumaParadaRev = r.paradasRevertidas > 0;
+            const isParcial = algumaParadaRev && !todasParadasRev;
+            return {
+                ...r,
+                revertido: algumaParadaRev ? 'SIM' : 'NÃO',
+                isParcial: isParcial
+            };
         }).sort((a, b) => b.est - a.est);
 
-        // Subtrai os pacotes revertidos do total ofensor daquele motivo
+        // Subtrai os revertidos somente no número vermelho do cabeçalho do card
         const somaOfensoresLiquida = Math.max(0, m.somaEstBruta - m.somaRevertidos);
 
         return {
@@ -2237,18 +2271,23 @@ function renderizarGeralOperacao() {
                     <tr>
                         <th style="text-align: left;">Rota</th>
                         <th style="text-align: right;">Pacotes</th>
+                        <th style="text-align: right;">P. Revertidos</th>
                         <th style="text-align: center;">Revertido</th>
                     </tr>
                 </thead>
                 <tbody>
                     ${rotasFiltradas.map(r => {
                         const isRev = r.revertido === 'SIM';
+                        const clsBadge = !isRev ? 'nao' : (r.isParcial ? 'sim-parcial' : 'sim');
+                        const clsRow = !isRev ? '' : (r.isParcial ? 'row-revertido-parcial' : 'row-revertido');
+                        const pctRevRota = r.estRevertido || 0;
                         return `
-                            <tr class="${isRev ? 'row-revertido' : ''}">
+                            <tr class="${clsRow}">
                                 <td>${r.routeName || r.routeId}</td>
                                 <td style="text-align: right; color: #b91c1c; font-weight: 800;">${r.est.toLocaleString('pt-BR')}</td>
+                                <td style="text-align: right; color: ${pctRevRota > 0 ? '#15803d' : '#94a3b8'}; font-weight: 800;">${pctRevRota.toLocaleString('pt-BR')}</td>
                                 <td style="text-align: center;">
-                                    <span class="go-rev-badge ${isRev ? 'sim' : 'nao'}">${isRev ? 'SIM' : 'NÃO'}</span>
+                                    <span class="go-rev-badge ${clsBadge}" title="${r.isParcial ? 'Reversão Parcial' : ''}">${isRev ? 'SIM' : 'NÃO'}</span>
                                 </td>
                             </tr>
                         `;
@@ -2272,29 +2311,21 @@ function renderizarGeralOperacao() {
     }).join('');
 }
 
-function exportarExcelGeralOperacao() {
-    if (!BI_DATA.raw || BI_DATA.raw.length === 0) return alert("Não existem dados carregados para exportar.");
-    const hS = obterHubFiltroEstatisticas();
-    const wb = XLSX.utils.book_new();
-    adicionarAbasGeralOperacaoNoWorkbook(wb);
-    XLSX.writeFile(wb, `Geral_da_Operacao_${hS}_${new Date().toISOString().split('T')[0]}.xlsx`);
-}
-
 function adicionarAbasGeralOperacaoNoWorkbook(wb) {
     const kpiSheet = [
         ['Indicador Geral da Operação', 'Valor'],
         ['Total de Pacotes Coletados', GO_DATA.totalColetados || 0],
-        ['Total de Pacotes Ofensores', GO_DATA.totalOfensoresPcts || 0],
+        ['Total de Pacotes Ofensores (Líquido)', GO_DATA.totalOfensoresPcts || 0],
         ['Total de Pacotes Revertidos', GO_DATA.totalRevertidosPcts || 0],
         ['Rotas com Ocorrência', GO_DATA.qtdRotasComOcorrencia || 0],
         ['Rotas Revertidas', GO_DATA.qtdRotasRevertidas || 0]
     ];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(kpiSheet), 'Geral Operação KPIs');
 
-    const ofensorasSheet = [['Motivo da Ocorrência', 'Rota', 'ID Rota', 'Pacotes Estimados', 'Acima de 100 Pcts?', 'Revertido']];
+    const ofensorasSheet = [['Motivo da Ocorrência', 'Rota', 'ID Rota', 'Pacotes', 'P. Revertidos', 'Acima de 100 Pcts?', 'Revertido']];
     (GO_DATA.motivosAgrupados || []).forEach(g => {
         g.rotas.forEach(r => {
-            ofensorasSheet.push([g.motivo, r.routeName || r.routeId, r.routeId, r.est, r.est >= 100 ? 'SIM' : 'NÃO', r.revertido]);
+            ofensorasSheet.push([g.motivo, r.routeName || r.routeId, r.routeId, r.est, r.estRevertido || 0, r.est >= 100 ? 'SIM' : 'NÃO', r.revertido]);
         });
     });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ofensorasSheet), 'Resumo Geral Ocorrências');
