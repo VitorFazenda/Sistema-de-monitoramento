@@ -31,7 +31,7 @@ OKTA_SECRET = os.getenv("OKTA_SECRET", "").strip()
 HEADLESS_MODE = os.getenv("HEADLESS_MODE", "False").lower() in ("true", "1", "t")
 
 # ==========================================
-# MAPEAMENTO SEGURO DE CONTAS (OCULTO DO FRONT-END)
+# MAPEAMENTO SEGURO DE CONTAS 
 # ==========================================
 CONTAS_MELI = {
     "Vitor.Martins": {

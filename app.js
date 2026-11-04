@@ -481,7 +481,7 @@ function ordenarRotasPorSequencia(lista) {
 // GESTÃO DE EQUIPA E METAS MENSAIS POR HUB
 // ==========================================
 function abrirModalEquipe() {
-    if(currentUser.cargo !== 'GERENTE' && currentUser.cargo !== 'COORDENADOR') return alert("🔒 Acesso Negado: Apenas o GERENTE e COORDENADOR podem gerir a equipa.");
+    if(currentUser.cargo !== 'GERENTE' && currentUser.cargo !== 'COORDENADOR') return alert("🔒 Acesso Negado: Apenas o GERENTE e COORDENADOR podem gerir a equipe.");
     fetch(`${API_BASE_URL}/usuarios`).then(r => r.json()).then(dados => {
         document.getElementById('lista-usuarios').innerHTML = dados.map(u => `<div class="user-list-item"><div><b style="color:#1e293b;">${u.username}</b><br><span style="font-size:11px; color:#64748b; font-weight:bold;">${u.cargo} | HUB: ${u.hubs}</span></div><div class="user-list-item-actions"><button class="btn-edit" onclick="editarUsuario('${u.username}', '${u.cargo}', '${u.hubs}')">✏️ Editar</button><button class="btn-del" onclick="excluirUser('${u.username}')">🗑️ Excluir</button></div></div>`).join('');
         document.getElementById('equipeModal').classList.add('show');
@@ -1687,16 +1687,144 @@ function renderOCPivot() {
     document.getElementById('oc-footer-pivot').innerText = `Total Geral: ${totG.toLocaleString('pt-BR')}`;
 }
 
+// Controla quais rotas estão com a caixa de paradas aberta no Monitor de Ocorrências
+let rotasExpandidasOC = new Set();
+
+function toggleParadasRotaOC(chaveGrupo) {
+    if (rotasExpandidasOC.has(chaveGrupo)) {
+        rotasExpandidasOC.delete(chaveGrupo);
+    } else {
+        rotasExpandidasOC.add(chaveGrupo);
+    }
+    renderOCDetails();
+}
+
 function renderOCDetails() {
     const term = document.getElementById('oc-search-details') ? document.getElementById('oc-search-details').value.toLowerCase() : '';
+    const mostrarRotas = document.getElementById('oc-chk-mostrar-rotas') ? document.getElementById('oc-chk-mostrar-rotas').checked : false;
+    const thParadaRota = document.getElementById('oc-th-parada-rota');
+    if (thParadaRota) {
+        thParadaRota.innerText = mostrarRotas ? 'Nome da Rota' : 'Parada';
+    }
+
     let rows = OC_DATA.rawWithEmpty || [];
 
     if (filtroMotivoAtualOC) rows = rows.filter(r => r.motivo === filtroMotivoAtualOC);
-    if (term) rows = rows.filter(r => r.routeId.toLowerCase().includes(term) || r.driverId.toLowerCase().includes(term) || r.stop.toLowerCase().includes(term) || r.detalhes.toLowerCase().includes(term) || (r.observacao || '').toLowerCase().includes(term));
+    if (term) {
+        rows = rows.filter(r =>
+            r.routeId.toLowerCase().includes(term) ||
+            (r.routeName || '').toLowerCase().includes(term) ||
+            r.driverId.toLowerCase().includes(term) ||
+            r.stop.toLowerCase().includes(term) ||
+            r.detalhes.toLowerCase().includes(term) ||
+            (r.observacao || '').toLowerCase().includes(term)
+        );
+    }
     
     const tb = document.getElementById('oc-tbl-details').querySelector('tbody');
     const podeEditar = !currentUser || currentUser.cargo !== 'MONITOR GRAU 1';
 
+    // MODO 1: Agrupado por Nome da Rota (com caixa expansível de paradas ao clicar)
+    if (mostrarRotas) {
+        const gruposMap = new Map();
+        rows.forEach(d => {
+            const chaveG = `${d.routeId}||${d.motivo}`;
+            if (!gruposMap.has(chaveG)) {
+                gruposMap.set(chaveG, {
+                    chaveGrupo: chaveG,
+                    routeId: d.routeId,
+                    routeName: d.routeName || d.routeId || 'Rota sem nome',
+                    driverId: d.driverId,
+                    motivo: d.motivo,
+                    est: 0,
+                    col: 0,
+                    itens: []
+                });
+            }
+            const g = gruposMap.get(chaveG);
+            g.est += (d.est || 0);
+            g.col += (d.col || 0);
+            g.itens.push(d);
+        });
+
+        const listaGrupos = Array.from(gruposMap.values());
+        let html = listaGrupos.slice(0, 400).map(g => {
+            const todasSim = g.itens.length > 0 && g.itens.every(x => String(x.revertido || 'NÃO').toUpperCase() === 'SIM');
+            const algumaSim = g.itens.some(x => String(x.revertido || 'NÃO').toUpperCase() === 'SIM');
+            const isSim = todasSim || algumaSim;
+            const obsUnica = g.itens.find(x => x.observacao)?.observacao || '';
+            const obsEscapada = String(obsUnica).replace(/"/g, '&quot;');
+            const detUnico = g.itens.find(x => x.detalhes && x.detalhes !== 'nan' && x.detalhes !== 'None')?.detalhes || '<span style="color:#cbd5e1">-</span>';
+            const estaAberta = rotasExpandidasOC.has(g.chaveGrupo);
+            const chaveEsc = g.chaveGrupo.replace(/'/g, "\\'");
+
+            let linhaPrincipal = `
+                <tr>
+                    <td style="font-family:monospace;font-size:11px;color:#4a5a7a">${g.routeId}</td>
+                    <td style="font-family:monospace;color:#0d1b3e;font-weight:700">${g.driverId}</td>
+                    <td>
+                        <div class="oc-rota-click" onclick="toggleParadasRotaOC('${chaveEsc}')" title="Clique para ver as paradas desta rota">
+                            <span>${estaAberta ? '▼' : '▶'}</span>
+                            <span>${g.routeName}</span>
+                            <span style="background:#0284c7;color:#fff;padding:1px 6px;border-radius:10px;font-size:10px;">${g.itens.length} parada${g.itens.length !== 1 ? 's' : ''}</span>
+                        </div>
+                    </td>
+                    <td style="color:${g.motivo === '(vazio)' ? '#64748b' : '#b91c1c'};font-weight:600">${g.motivo}</td>
+                    <td style="text-align: center; font-weight:700;">${g.est}</td>
+                    <td style="text-align: center;">${g.col}</td>
+                    <td style="text-align: center;">
+                        <select class="oc-rev-select ${isSim ? 'sim' : 'nao'}" ${podeEditar ? '' : 'disabled'} onchange="aoMudarRevertidoRotaGrupoOC('${chaveEsc}', this.value, this)">
+                            <option value="NÃO" ${!isSim ? 'selected' : ''}>NÃO</option>
+                            <option value="SIM" ${isSim ? 'selected' : ''}>SIM</option>
+                        </select>
+                    </td>
+                    <td>
+                        <input type="text" class="oc-obs-input" value="${obsEscapada}" placeholder="Adicionar observação..." ${podeEditar ? '' : 'disabled'} onchange="aoMudarObservacaoRotaGrupoOC('${chaveEsc}', this.value)">
+                    </td>
+                    <td style="font-size:11px; color:#4a5a7a">${detUnico}</td>
+                </tr>
+            `;
+
+            if (estaAberta) {
+                const paradasHTML = g.itens.map((p, iStop) => {
+                    const pSim = String(p.revertido || 'NÃO').toUpperCase() === 'SIM';
+                    return `
+                        <div class="oc-parada-item-row">
+                            <span style="font-weight:700; color:#0d1b3e;">📍 ${iStop + 1}. ${p.stop || 'Parada sem nome'}</span>
+                            <div style="display:flex; align-items:center; gap:12px;">
+                                <span style="font-size:11px; color:#475569;">Est: <b>${p.est}</b> | Col: <b>${p.col}</b></span>
+                                <select class="oc-rev-select ${pSim ? 'sim' : 'nao'}" ${podeEditar ? '' : 'disabled'} onchange="aoMudarRevertidoOC(${p.idx}, this.value, this)">
+                                    <option value="NÃO" ${!pSim ? 'selected' : ''}>NÃO</option>
+                                    <option value="SIM" ${pSim ? 'selected' : ''}>SIM</option>
+                                </select>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                linhaPrincipal += `
+                    <tr class="oc-paradas-box-row">
+                        <td colspan="9">
+                            <div class="oc-paradas-subbox">
+                                <div class="oc-paradas-subbox-title">📋 Paradas da Rota ${g.routeName} (${g.itens.length}):</div>
+                                <div class="oc-paradas-chips-list">
+                                    ${paradasHTML}
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            }
+
+            return linhaPrincipal;
+        }).join('');
+
+        tb.innerHTML = html || `<tr><td colspan="9" style="text-align:center; color:#8a9abc; padding: 20px;">Nenhuma rota corresponde ao filtro.</td></tr>`;
+        document.getElementById('oc-footer-details').innerText = `A mostrar ${Math.min(listaGrupos.length, 400)} de ${listaGrupos.length} rota(s) agrupada(s) (${rows.length} paradas no total).`;
+        return;
+    }
+
+    // MODO 2: Padrão por Parada individual
     let html = rows.slice(0, 600).map(d => {
         let dT = d.detalhes && d.detalhes !== 'nan' && d.detalhes !== 'None' ? d.detalhes : '<span style="color:#cbd5e1">-</span>';
         const isSim = String(d.revertido || 'NÃO').toUpperCase() === 'SIM';
@@ -1726,6 +1854,71 @@ function renderOCDetails() {
 
     tb.innerHTML = html || `<tr><td colspan="9" style="text-align:center; color:#8a9abc; padding: 20px;">Nenhuma ocorrência corresponde ao filtro.</td></tr>`;
     document.getElementById('oc-footer-details').innerText = rows.length > 600 ? `A mostrar 600 de ${rows.length} registos.` : `A mostrar ${rows.length} registos.`;
+}
+
+function aoMudarRevertidoRotaGrupoOC(chaveGrupo, novoValor, selectEl) {
+    const valLimpo = String(novoValor || 'NÃO').toUpperCase().trim();
+    if (selectEl) {
+        selectEl.className = `oc-rev-select ${valLimpo === 'SIM' ? 'sim' : 'nao'}`;
+    }
+    const [rIdAlvo, motivoAlvo] = chaveGrupo.split('||');
+    const itensAfetados = (OC_DATA.rawWithEmpty || []).filter(x => x.routeId === rIdAlvo && x.motivo === motivoAlvo);
+
+    itensAfetados.forEach(item => {
+        item.revertido = valLimpo;
+        controleOcorrencias[item.chave] = {
+            id_rota: item.routeId,
+            revertido: valLimpo,
+            observacao: item.observacao || ''
+        };
+        fetch(`${API_BASE_URL}/salvar_edicao_ocorrencia`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                chave: item.chave,
+                id_rota: item.routeId,
+                revertido: valLimpo,
+                observacao: item.observacao || ''
+            })
+        }).catch(e => console.error(e));
+    });
+
+    (OC_DATA.raw || []).forEach(x => {
+        if (x.routeId === rIdAlvo && x.motivo === motivoAlvo) x.revertido = valLimpo;
+    });
+
+    const baseFiltrada = filtrarBaseRelatorio('filtro-data-est', 'filtro-hub-est', 'data-ini-est', 'data-fim-est', 'container-periodo-est');
+    gerarGeralOperacao(baseFiltrada);
+    renderOCDetails();
+}
+
+function aoMudarObservacaoRotaGrupoOC(chaveGrupo, novaObs) {
+    const obsLimpa = String(novaObs || '').trim();
+    const [rIdAlvo, motivoAlvo] = chaveGrupo.split('||');
+    const itensAfetados = (OC_DATA.rawWithEmpty || []).filter(x => x.routeId === rIdAlvo && x.motivo === motivoAlvo);
+
+    itensAfetados.forEach(item => {
+        item.observacao = obsLimpa;
+        controleOcorrencias[item.chave] = {
+            id_rota: item.routeId,
+            revertido: item.revertido || 'NÃO',
+            observacao: obsLimpa
+        };
+        fetch(`${API_BASE_URL}/salvar_edicao_ocorrencia`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                chave: item.chave,
+                id_rota: item.routeId,
+                revertido: item.revertido || 'NÃO',
+                observacao: obsLimpa
+            })
+        }).catch(e => console.error(e));
+    });
+
+    (OC_DATA.raw || []).forEach(x => {
+        if (x.routeId === rIdAlvo && x.motivo === motivoAlvo) x.observacao = obsLimpa;
+    });
 }
 
 function aoMudarRevertidoOC(idx, novoValor, selectEl) {
@@ -1854,6 +2047,7 @@ function gerarGeralOperacao(rawRows) {
     (OC_DATA.raw || []).forEach(occ => {
         const rId = occ.routeId || 'SEM_ID';
         const isOccRev = String(occ.revertido || 'NÃO').toUpperCase() === 'SIM';
+        const pctEst = occ.est || 0;
 
         if (!rotasOfensorasUnicas.has(rId)) {
             rotasOfensorasUnicas.set(rId, {
@@ -1865,11 +2059,11 @@ function gerarGeralOperacao(rawRows) {
             });
         }
         const rUnica = rotasOfensorasUnicas.get(rId);
-        rUnica.est += occ.est || 0;
+        rUnica.est += pctEst;
         rUnica.col += occ.col || 0;
 
         if (isOccRev) {
-            totalRevertidosPcts += (occ.est || 0);
+            totalRevertidosPcts += pctEst;
             rotasRevertidasSet.add(rId);
         }
 
@@ -1877,12 +2071,16 @@ function gerarGeralOperacao(rawRows) {
         if (!mapaMotivos[motivo]) {
             mapaMotivos[motivo] = {
                 motivo: motivo,
-                somaEstTotal: 0,
+                somaEstBruta: 0,
+                somaRevertidos: 0,
                 qtdParadas: 0,
                 rotasMap: {}
             };
         }
-        mapaMotivos[motivo].somaEstTotal += occ.est || 0;
+        mapaMotivos[motivo].somaEstBruta += pctEst;
+        if (isOccRev) {
+            mapaMotivos[motivo].somaRevertidos += pctEst;
+        }
         mapaMotivos[motivo].qtdParadas += 1;
 
         if (!mapaMotivos[motivo].rotasMap[rId]) {
@@ -1896,7 +2094,7 @@ function gerarGeralOperacao(rawRows) {
                 algumaRevertida: false
             };
         }
-        mapaMotivos[motivo].rotasMap[rId].est += occ.est || 0;
+        mapaMotivos[motivo].rotasMap[rId].est += pctEst;
         mapaMotivos[motivo].rotasMap[rId].col += occ.col || 0;
         mapaMotivos[motivo].rotasMap[rId].paradas += 1;
         if (isOccRev) {
@@ -1904,19 +2102,27 @@ function gerarGeralOperacao(rawRows) {
         }
     });
 
-    let totalOfensoresOcorrenciaPcts = 0;
+    let totalOfensoresBruto = 0;
     rotasOfensorasUnicas.forEach(rt => {
-        totalOfensoresOcorrenciaPcts += rt.est;
+        totalOfensoresBruto += rt.est;
     });
+
+    // Subtrai os pacotes revertidos da conta total de ofensores
+    const totalOfensoresLiquido = Math.max(0, totalOfensoresBruto - totalRevertidosPcts);
 
     const motivosAgrupados = Object.values(mapaMotivos).map(m => {
         const listaRotas = Object.values(m.rotasMap).map(r => {
             return { ...r, revertido: r.algumaRevertida ? 'SIM' : 'NÃO' };
         }).sort((a, b) => b.est - a.est);
 
+        // Subtrai os pacotes revertidos do total ofensor daquele motivo
+        const somaOfensoresLiquida = Math.max(0, m.somaEstBruta - m.somaRevertidos);
+
         return {
             motivo: m.motivo,
-            somaEstTotal: m.somaEstTotal,
+            somaEstTotal: somaOfensoresLiquida,
+            somaEstBruta: m.somaEstBruta,
+            somaRevertidos: m.somaRevertidos,
             qtdParadas: m.qtdParadas,
             rotas: listaRotas
         };
@@ -1924,7 +2130,8 @@ function gerarGeralOperacao(rawRows) {
 
     GO_DATA = {
         totalColetados: totalColetados,
-        totalOfensoresPcts: totalOfensoresOcorrenciaPcts,
+        totalOfensoresPcts: totalOfensoresLiquido,
+        totalOfensoresBruto: totalOfensoresBruto,
         totalOfensoresPontualidade: pctsForaJanela,
         totalRevertidosPcts: totalRevertidosPcts,
         qtdRotasRevertidas: rotasRevertidasSet.size,
@@ -1955,7 +2162,7 @@ function renderizarGeralOperacao() {
             <div class="go-kpi-info">
                 <label>🚨 Total de Pacotes Ofensores</label>
                 <div class="go-val" style="color: #dc2626;">${(GO_DATA.totalOfensoresPcts || 0).toLocaleString('pt-BR')}</div>
-                <div class="go-sub">${GO_DATA.qtdRotasComOcorrencia} rotas em ocorrência | ${(GO_DATA.totalOfensoresPontualidade || 0).toLocaleString('pt-BR')} pcts fora da janela</div>
+                <div class="go-sub">${GO_DATA.qtdRotasComOcorrencia} rotas em ocorrência (já descontados ${(GO_DATA.totalRevertidosPcts || 0).toLocaleString('pt-BR')} revertidos)</div>
             </div>
             <div class="go-kpi-icon" style="background: #fee2e2; color: #dc2626;">⚠️</div>
         </div>
@@ -2054,7 +2261,8 @@ function renderizarGeralOperacao() {
             <div class="go-occ-card">
                 <div class="go-occ-header">
                     <div class="go-occ-title">📌 ${grupo.motivo}</div>
-                    <div class="go-occ-badge">${grupo.somaEstTotal.toLocaleString('pt-BR')} pcts</div>
+                    <div class="go-occ-rev-square" title="Pacotes revertidos subtraídos da conta de ofensores">${(grupo.somaRevertidos || 0).toLocaleString('pt-BR')}</div>
+                    <div class="go-occ-badge" title="Pacotes ofensores líquidos (Bruto: ${(grupo.somaEstBruta || 0).toLocaleString('pt-BR')})">${grupo.somaEstTotal.toLocaleString('pt-BR')} pcts</div>
                 </div>
                 <div class="go-occ-body">
                     ${tabelaHTML}

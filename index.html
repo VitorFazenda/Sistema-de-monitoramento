@@ -54,7 +54,7 @@
                         <div class="user-menu-nome" id="menu-nome">User</div>
                         <div class="user-menu-cargo" id="menu-cargo">CARGO</div>
                     </div>
-                    <button class="user-menu-btn" onclick="abrirModalEquipe()">⚙️ Gerenciar Equipa</button>
+                    <button class="user-menu-btn" onclick="abrirModalEquipe()">⚙️ Gerenciar Equipe</button>
                     <button class="user-menu-btn sair" onclick="fazerLogoff()">🚪 Sair do Sistema</button>
                 </div>
             </div>
@@ -85,7 +85,7 @@
                 <div class="home-welcome-banner">
                     <div>
                         <h1 id="home-saudacao">Bem-vindo(a) de volta!</h1>
-                        <p>Selecione um dos cards abaixo para iniciar a sua operação em tempo real.</p>
+                        <p>Selecione um dos cards abaixo para iniciar a sua operação.</p>
                     </div>
                     <div class="home-badge-info">
                         <span>Nível de Acesso: <b id="home-cargo-badge">---</b></span>
@@ -482,7 +482,13 @@
                             </div>
                             <div class="bi-controls" style="background: #f8fafc;">
                                 <label>Buscar:</label>
-                                <input type="text" id="oc-search-details" placeholder="Rota, motorista, parada..." oninput="renderOCDetails()" style="flex: 1; max-width: 300px;">
+                                <input type="text" id="oc-search-details" placeholder="Rota, motorista, parada..." oninput="renderOCDetails()" style="flex: 1; max-width: 260px;">
+                                
+                                <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-weight: 700; color: #1a237e; background: #e0f2fe; padding: 5px 10px; border-radius: 6px; border: 1px solid #bae6fd; font-size: 12px; user-select: none;">
+                                    <input type="checkbox" id="oc-chk-mostrar-rotas" onchange="renderOCDetails()" style="width: 15px; height: 15px; accent-color: #1a237e; cursor: pointer; margin: 0;">
+                                    Mostrar nome de rotas
+                                </label>
+
                                 <button onclick="exportarEstratificacaoOC()" class="bi-btn-estratificacao">⬇ Exportar Detalhes</button>
                             </div>
                             <div class="bi-tbl-wrap" style="max-height: 430px; overflow-y: auto;">
@@ -491,7 +497,7 @@
                                         <tr>
                                             <th>ID Rota</th>
                                             <th>Motorista</th>
-                                            <th>Parada</th>
+                                            <th id="oc-th-parada-rota">Parada</th>
                                             <th>Motivo</th>
                                             <th style="text-align: center;">Pcts Est.</th>
                                             <th style="text-align: center;">Pcts Col.</th>
