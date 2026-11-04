@@ -19,22 +19,56 @@ DIRETORIO_RAIZ = os.path.abspath(os.path.join(DIRETORIO_ROBO, '..'))
 CAMINHO_ENV = os.path.join(DIRETORIO_RAIZ, 'backend', '.env')
 PASTA_SESSAO = os.path.join(DIRETORIO_ROBO, 'sessao_meli')
 PASTA_TEMP = os.path.join(DIRETORIO_RAIZ, 'temp')
+ARQUIVO_ULTIMA_CONTA = os.path.join(DIRETORIO_ROBO, 'ultima_conta_meli.json')
 
 load_dotenv(CAMINHO_ENV)
 
 DB_URL = os.getenv("DATABASE_URL")
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
-MELI_USER = os.getenv("MELI_USER")
-MELI_PASS = os.getenv("MELI_PASS")
+MELI_USER = os.getenv("MELI_USER", "ext_vifazend")
+MELI_PASS = os.getenv("MELI_PASS", "Palido%2696%")
 OKTA_SECRET = os.getenv("OKTA_SECRET", "").strip()
 HEADLESS_MODE = os.getenv("HEADLESS_MODE", "False").lower() in ("true", "1", "t")
 
+# ==========================================
+# MAPEAMENTO SEGURO DE CONTAS (OCULTO DO FRONT-END)
+# ==========================================
+CONTAS_MELI = {
+    "Vitor.Martins": {
+        "user": MELI_USER,
+        "pass": MELI_PASS
+    },
+    "Larissa.Campos": {
+        "user": os.getenv("MELI_USER_2", "ext_camplari"),
+        "pass": os.getenv("MELI_PASS_2", "Ensalada@0533.")
+    }
+}
+
+def carregar_ultima_conta_logada() -> str:
+    """Recupera a última conta que foi utilizada para logar"""
+    try:
+        if os.path.exists(ARQUIVO_ULTIMA_CONTA):
+            with open(ARQUIVO_ULTIMA_CONTA, "r", encoding="utf-8") as f:
+                dados = json.load(f)
+                conta = dados.get("conta", "Vitor.Martins")
+                if conta in CONTAS_MELI:
+                    return conta
+    except Exception:
+        pass
+    return "Vitor.Martins"
+
+def salvar_ultima_conta_logada(nome_conta: str):
+    """Salva a conta atual para que na próxima expiração de sessão tente logar nela"""
+    try:
+        with open(ARQUIVO_ULTIMA_CONTA, "w", encoding="utf-8") as f:
+            json.dump({"conta": nome_conta}, f)
+    except Exception:
+        pass
+
+CONTA_ATUAL = carregar_ultima_conta_logada()
+
 if not DB_URL:
     print("❌ Erro Crítico: DATABASE_URL não encontrada. Verifique o seu ficheiro .env!")
-    exit()
-
-if not MELI_USER or not MELI_PASS:
-    print("❌ Erro Crítico: MELI_USER ou MELI_PASS não encontradas no .env!")
     exit()
 
 motor_db = create_engine(DB_URL)
@@ -49,19 +83,23 @@ def log_painel(mensagem):
 
 def informar_status_login(status_str):
     try:
-        requests.post(f"{API_URL}/status_login_robo", json={"status": status_str}, timeout=2)
+        requests.post(
+            f"{API_URL}/status_login_robo",
+            json={"status": status_str, "conta": CONTA_ATUAL},
+            timeout=2
+        )
     except Exception:
         pass
 
 def ler_comando_okta_api():
-    """Consulta na API se o utilizador enviou um código Okta ou pediu para recarregar o site"""
+    """Consulta na API se o utilizador enviou código Okta, trocou a conta ou pediu para recarregar"""
     try:
         r = requests.get(f"{API_URL}/obter_comando_okta", timeout=3)
         if r.status_code == 200:
             return r.json()
     except Exception:
         pass
-    return {"codigo": "", "reiniciar_login": False}
+    return {"codigo": "", "reiniciar_login": False, "trocar_conta": "", "conta_ativa": CONTA_ATUAL}
 
 def gerar_codigo_totp_automatico():
     """Gera o código de 6 dígitos automaticamente se OKTA_SECRET estiver configurado no .env"""
@@ -140,7 +178,7 @@ def daemon_heartbeat():
         time.sleep(3)
 
 # ==========================================
-# MÓDULO DE LOGIN AUTOMATIZADO (OKTA ESTÁVEL SEM DUPLA NAVEGAÇÃO)
+# MÓDULO DE LOGIN AUTOMATIZADO (MULTI-CONTA + AUTO-RELOAD 5 MIN)
 # ==========================================
 def clicar_botao_avancar_okta(page):
     """Localiza e clica no botão de submissão do Okta (Próximo / Verificar / Confirmar)"""
@@ -158,6 +196,25 @@ def clicar_botao_avancar_okta(page):
             return True
     return False
 
+def clicar_voltar_tela_login_okta(page):
+    """Clica no botão 'Voltar à tela de login' (<a data-se="cancel" class="js-cancel cancelb">)"""
+    seletores_voltar = [
+        'a[data-se="cancel"]',
+        'a.js-cancel.cancelb',
+        'a:has-text("Voltar à tela de login")',
+        'a:has-text("Sign out")'
+    ]
+    for sel in seletores_voltar:
+        try:
+            btn = page.locator(sel).first
+            if btn.count() > 0 and btn.is_visible():
+                btn.click(timeout=5000)
+                time.sleep(3)
+                return True
+        except Exception:
+            pass
+    return False
+
 def pagina_esta_no_okta(page):
     url_atual = (page.url or "").lower()
     if "auth-meli.adminml.com" in url_atual or "okta.com" in url_atual:
@@ -170,6 +227,8 @@ def pagina_esta_no_okta(page):
     return False
 
 def garantir_login(page, forcar_recarregamento=False):
+    global CONTA_ATUAL
+    CONTA_ATUAL = carregar_ultima_conta_logada()
     log_painel("🔎 Verificando sessão do Mercado Livre...")
     url_atual = page.url or ""
     
@@ -192,16 +251,49 @@ def garantir_login(page, forcar_recarregamento=False):
     aviso_okta_enviado = False
     ultimo_user_preenchido = 0
     ultima_senha_preenchida = 0
+    inicio_espera_okta = time.time()
 
     while pagina_esta_no_okta(page):
         cmd = ler_comando_okta_api()
 
-        if cmd.get("reiniciar_login"):
-            log_painel("🔄 Reiniciando página de login do Meli a pedido do painel...")
+        # 1. Verifica se o utilizador trocou a conta no seletor (Ex: Vitor.Martins <-> Larissa.Campos)
+        nova_conta = str(cmd.get("trocar_conta", "")).strip()
+        if nova_conta and nova_conta in CONTAS_MELI:
+            CONTA_ATUAL = nova_conta
+            salvar_ultima_conta_logada(CONTA_ATUAL)
+            informar_status_login("AGUARDANDO_OKTA")
+            log_painel(f"🔄 Alternando para o login de {CONTA_ATUAL}. Clicando em 'Voltar à tela de login'...")
+            
+            clicou_voltar = clicar_voltar_tela_login_okta(page)
+            if not clicou_voltar:
+                try:
+                    page.goto("https://envios.adminml.com/logistics/first-mile/monitoring", wait_until="domcontentloaded", timeout=60000)
+                    time.sleep(4)
+                except Exception:
+                    pass
+
             aviso_okta_enviado = False
             ultimo_user_preenchido = 0
             ultima_senha_preenchida = 0
+            inicio_espera_okta = time.time()
+            continue
+
+        # 2. Se clicou em "Recarregar Site / Reiniciar Login" OU se passaram 5 minutos (300s) sem enviar o código Okta
+        tempo_esperando_okta = time.time() - inicio_espera_okta
+        passou_5_minutos = (aviso_okta_enviado and tempo_esperando_okta >= 300)
+
+        if cmd.get("reiniciar_login") or passou_5_minutos:
+            if passou_5_minutos:
+                log_painel("⏰ 5 minutos aguardando código Okta. Recarregando a página automaticamente...")
+            else:
+                log_painel("🔄 Reiniciando página de login do Meli a pedido do painel...")
+                
+            aviso_okta_enviado = False
+            ultimo_user_preenchido = 0
+            ultima_senha_preenchida = 0
+            inicio_espera_okta = time.time()
             try:
+                clicar_voltar_tela_login_okta(page)
                 page.goto("https://envios.adminml.com/logistics/first-mile/monitoring", wait_until="domcontentloaded", timeout=60000)
                 time.sleep(4)
             except Exception as e:
@@ -209,24 +301,27 @@ def garantir_login(page, forcar_recarregamento=False):
             continue
 
         codigo_recebido = str(cmd.get("codigo", "")).strip()
+        credenciais_atuais = CONTAS_MELI.get(CONTA_ATUAL, CONTAS_MELI["Vitor.Martins"])
+        usuario_meli_atual = credenciais_atuais["user"]
+        senha_meli_atual = credenciais_atuais["pass"]
 
         try:
-            # 1. Campo de Utilizador (Identifier)
+            # 3. Campo de Utilizador (Identifier)
             campo_user = page.locator('input[name="identifier"]')
             if campo_user.count() > 0 and campo_user.first.is_visible():
-                # Só preenche o identifier se não houver campo de senha/código visível na mesma tela
                 campos_cred_visiveis = page.locator('input[type="password"]:visible, input[name="credentials.passcode"]:visible, input[name="credentials.totp"]:visible').count()
                 if campos_cred_visiveis == 0 and (time.time() - ultimo_user_preenchido) > 8:
-                    log_painel(f"👤 Preenchendo utilizador ({MELI_USER}) e avançando...")
+                    log_painel(f"👤 Preenchendo utilizador ({usuario_meli_atual}) e avançando...")
                     campo_user.first.fill("")
-                    campo_user.first.fill(MELI_USER)
+                    campo_user.first.fill(usuario_meli_atual)
                     clicar_botao_avancar_okta(page)
                     ultimo_user_preenchido = time.time()
                     aviso_okta_enviado = False
+                    inicio_espera_okta = time.time()
                     time.sleep(3.5)
                     continue
 
-            # 2. Se aparecer lista de fatores de autenticação
+            # 4. Se aparecer lista de fatores de autenticação
             btn_fator = page.locator('[data-se="okta_verify-totp"] a, [data-se="google_otp"] a, a:has-text("Inserir um código"), a:has-text("Enter a code")')
             if btn_fator.count() > 0 and btn_fator.first.is_visible():
                 log_painel("📲 Selecionando opção de código Okta Verify...")
@@ -234,7 +329,7 @@ def garantir_login(page, forcar_recarregamento=False):
                 time.sleep(2.5)
                 continue
 
-            # 3. Campos de Senha ou Código Okta
+            # 5. Campos de Senha ou Código Okta
             campo_cred = page.locator('input[name="credentials.passcode"], input[name="credentials.totp"], input[name="answer"], input[type="password"], input[type="tel"], input[type="text"]')
             if campo_cred.count() > 0:
                 input_alvo = None
@@ -249,7 +344,6 @@ def garantir_login(page, forcar_recarregamento=False):
                     tipo_input = (input_alvo.get_attribute("type") or "text").lower()
                     auto_attr = (input_alvo.get_attribute("autocomplete") or "").lower()
                     
-                    # Lê o título/label específico do campo (sem ser enganado pelo rodapé do form)
                     titulo_form = ""
                     try:
                         titulo_el = page.locator('h2.okta-form-title, [data-se="o-form-head"], label[for]').first
@@ -258,7 +352,6 @@ def garantir_login(page, forcar_recarregamento=False):
                     except Exception:
                         pass
 
-                    # Se o utilizador acabou de enviar um código de 6 dígitos pelo painel, prioriza injetar o código se não for explicitamente um input password puro
                     is_tela_codigo = (
                         "verify" in titulo_form or "código" in titulo_form or "code" in titulo_form or
                         tipo_input == "tel" or auto_attr == "one-time-code"
@@ -267,12 +360,12 @@ def garantir_login(page, forcar_recarregamento=False):
 
                     if is_tela_senha and not codigo_recebido:
                         if (time.time() - ultima_senha_preenchida) > 6:
-                            log_painel("🔑 Tela de palavra-passe detetada! A injetar senha automaticamente...")
+                            log_painel("🔑 Tela de palavra-passe detectada! Inserindo senha automaticamente...")
                             input_alvo.fill("")
-                            input_alvo.fill(MELI_PASS)
+                            input_alvo.fill(senha_meli_atual)
                             clicar_botao_avancar_okta(page)
                             ultima_senha_preenchida = time.time()
-                            log_painel("⏳ Palavra-passe enviada! A aguardar redirecionamento...")
+                            log_painel("⏳ Palavra-passe enviada! Aguardando redirecionamento...")
                             time.sleep(4)
                             continue
                     else:
@@ -280,6 +373,7 @@ def garantir_login(page, forcar_recarregamento=False):
                         if not aviso_okta_enviado:
                             log_painel("📲 AGUARDANDO CÓDIGO OKTA: Digite os 6 dígitos na 'Área do Robô' e clique em Ativar!")
                             aviso_okta_enviado = True
+                            inicio_espera_okta = time.time()
 
                         codigo_para_usar = codigo_recebido or gerar_codigo_totp_automatico()
                         if codigo_para_usar:
@@ -288,6 +382,7 @@ def garantir_login(page, forcar_recarregamento=False):
                             input_alvo.fill(codigo_para_usar)
                             clicar_botao_avancar_okta(page)
                             aviso_okta_enviado = False
+                            inicio_espera_okta = time.time()
                             time.sleep(4)
                             continue
 
@@ -297,8 +392,9 @@ def garantir_login(page, forcar_recarregamento=False):
         time.sleep(1.5)
 
     time.sleep(3)
+    salvar_ultima_conta_logada(CONTA_ATUAL)
     informar_status_login("LOGADO")
-    log_painel("✅ Login concluído com sucesso! Sessão ativa e guardada.")
+    log_painel("✅ Login concluído com sucesso! Sessão ativa e salva por um período.")
     return True
 
 def traduzir_status_meli(status_bruto: str, coletados_int: int) -> str:
@@ -351,7 +447,7 @@ def clicar_limpar_todos_filtros(page):
 def executar_raspagem(page, hub_alvo):
     for tentativa in range(2):
         try:
-            log_painel(f"⚡ Iniciando raspagem DOM-Read para {hub_alvo} (Tentativa {tentativa+1}/2)...")
+            log_painel(f"⚡ Iniciando processo de raspagem para {hub_alvo} (Tentativa {tentativa+1}/2)...")
             
             if tentativa > 0 or "first-mile/monitoring" not in (page.url or ""):
                 page.goto(
@@ -427,96 +523,110 @@ def executar_raspagem(page, hub_alvo):
             else:
                 log_painel("🌎 Filtros limpos! Raspando TODAS as rotas disponíveis no sistema.")
 
-            # Leitura da div.list > div.monitoring-row com espera estendida de até 20s
+            # Inicia o aviso periódico "Robô raspando rotas" a cada 5 segundos enquanto lê as páginas
+            parar_aviso_raspagem = threading.Event()
+            def loop_aviso_raspando():
+                while not parar_aviso_raspagem.is_set():
+                    log_painel("🤖 Robô raspando rotas...")
+                    if parar_aviso_raspagem.wait(5.0):
+                        break
+
+            thread_aviso = threading.Thread(target=loop_aviso_raspando, daemon=True)
+            thread_aviso.start()
+
             dados_raspados = []
             pagina_atual = 1
             seletor_cards = "div.list div.monitoring-row, div.monitoring-row, div.monitoring-row-higher"
             
-            while True:
-                try:
-                    page.wait_for_selector(seletor_cards, timeout=20000)
-                    time.sleep(1.0)
-                    linhas_rotas = page.locator("div.list > div.monitoring-row").all()
-                    if not linhas_rotas:
-                        linhas_rotas = page.locator("div.monitoring-row").all()
-                    if not linhas_rotas:
-                        linhas_rotas = page.locator("div.monitoring-row-higher").all()
+            try:
+                while True:
+                    try:
+                        page.wait_for_selector(seletor_cards, timeout=20000)
+                        time.sleep(1.0)
+                        linhas_rotas = page.locator("div.list > div.monitoring-row").all()
+                        if not linhas_rotas:
+                            linhas_rotas = page.locator("div.monitoring-row").all()
+                        if not linhas_rotas:
+                            linhas_rotas = page.locator("div.monitoring-row-higher").all()
 
-                    for linha in linhas_rotas:
-                        texto_card_completo = linha.text_content() or ""
+                        for linha in linhas_rotas:
+                            texto_card_completo = linha.text_content() or ""
 
-                        nome_el = linha.locator("p.monitoring-row-higher-details__text.bold").first
-                        nome_bruto = (nome_el.text_content() or "") if nome_el.count() > 0 else ""
-                        nome_rota = nome_bruto.replace("Rota ", "").strip()
-                        
-                        if "NÃO PLANEJADA" in nome_rota.upper() or "NAO PLANEJADA" in nome_rota.upper():
-                            prefixo_hub = hub_alvo if hub_alvo != "TODOS" else "AVULSA"
-                            nome_rota = f"{prefixo_hub}_ROTA_AVULSA"
+                            nome_el = linha.locator("p.monitoring-row-higher-details__text.bold").first
+                            nome_bruto = (nome_el.text_content() or "") if nome_el.count() > 0 else ""
+                            nome_rota = nome_bruto.replace("Rota ", "").strip()
+                            
+                            if "NÃO PLANEJADA" in nome_rota.upper() or "NAO PLANEJADA" in nome_rota.upper():
+                                prefixo_hub = hub_alvo if hub_alvo != "TODOS" else "AVULSA"
+                                nome_rota = f"{prefixo_hub}_ROTA_AVULSA"
 
-                        id_el = linha.locator(".button-copy__text").first
-                        id_bruto = (id_el.text_content() or "") if id_el.count() > 0 else ""
-                        id_rota = re.sub(r'[^0-9]', '', id_bruto)
-                        if not id_rota:
-                            continue
+                            id_el = linha.locator(".button-copy__text").first
+                            id_bruto = (id_el.text_content() or "") if id_el.count() > 0 else ""
+                            id_rota = re.sub(r'[^0-9]', '', id_bruto)
+                            if not id_rota:
+                                continue
 
-                        mot_el = linha.locator('[data-testid="carrier-or-driver-name"]').first
-                        motorista = (mot_el.text_content() or "").strip() if mot_el.count() > 0 else ""
+                            mot_el = linha.locator('[data-testid="carrier-or-driver-name"]').first
+                            motorista = (mot_el.text_content() or "").strip() if mot_el.count() > 0 else ""
 
-                        placa = ""
-                        try:
-                            placa_el = linha.locator(".monitoring-row-lower-details.vehicle p").first
-                            if placa_el.count() > 0:
-                                placa_bruta = placa_el.text_content() or ""
-                                placa = placa_bruta.split("|")[0].strip()
-                        except Exception:
                             placa = ""
+                            try:
+                                placa_el = linha.locator(".monitoring-row-lower-details.vehicle p").first
+                                if placa_el.count() > 0:
+                                    placa_bruta = placa_el.text_content() or ""
+                                    placa = placa_bruta.split("|")[0].strip()
+                            except Exception:
+                                placa = ""
 
-                        horario_el = linha.locator(".monitoring-row-higher-details.eta p, div[data-testid='active-route-eta'] p").first
-                        horario = (horario_el.text_content() or "").strip() if horario_el.count() > 0 else "Sem Horário"
+                            horario_el = linha.locator(".monitoring-row-higher-details.eta p, div[data-testid='active-route-eta'] p").first
+                            horario = (horario_el.text_content() or "").strip() if horario_el.count() > 0 else "Sem Horário"
 
-                        match_col = re.search(r'(\d[\d\.]*)\s*(?:pacotes\s*)?coletados', texto_card_completo, re.IGNORECASE)
-                        coletados = re.sub(r'\D', '', match_col.group(1)) if match_col else "0"
+                            match_col = re.search(r'(\d[\d\.]*)\s*(?:pacotes\s*)?coletados', texto_card_completo, re.IGNORECASE)
+                            coletados = re.sub(r'\D', '', match_col.group(1)) if match_col else "0"
 
-                        match_est = re.search(r'(\d[\d\.]*)\s*(?:pacotes\s*)?estimados', texto_card_completo, re.IGNORECASE)
-                        estimados = re.sub(r'\D', '', match_est.group(1)) if match_est else "0"
+                            match_est = re.search(r'(\d[\d\.]*)\s*(?:pacotes\s*)?estimados', texto_card_completo, re.IGNORECASE)
+                            estimados = re.sub(r'\D', '', match_est.group(1)) if match_est else "0"
 
-                        int_est = int(estimados) if estimados.isdigit() else 0
-                        int_col = int(coletados) if coletados.isdigit() else 0
-                        restante = str(int_est - int_col)
+                            int_est = int(estimados) if estimados.isdigit() else 0
+                            int_col = int(coletados) if coletados.isdigit() else 0
+                            restante = str(int_est - int_col)
 
-                        status_el = linha.locator(".status-main p.bold, .monitoring-row-higher-details.status p.bold").first
-                        status_meli_bruto = (status_el.text_content() or "").strip() if status_el.count() > 0 else "Sem início"
-                        status_traduzido = traduzir_status_meli(status_meli_bruto, int_col)
+                            status_el = linha.locator(".status-main p.bold, .monitoring-row-higher-details.status p.bold").first
+                            status_meli_bruto = (status_el.text_content() or "").strip() if status_el.count() > 0 else "Sem início"
+                            status_traduzido = traduzir_status_meli(status_meli_bruto, int_col)
 
-                        match_cluster = re.search(r'_(C\d+)_', nome_rota)
-                        cluster = match_cluster.group(1) if match_cluster else "Sem Cluster"
+                            match_cluster = re.search(r'_(C\d+)_', nome_rota)
+                            cluster = match_cluster.group(1) if match_cluster else "Sem Cluster"
+                            
+                            dados_raspados.append({
+                                "id_rota": id_rota,
+                                "nome_rota": nome_rota,
+                                "cluster": cluster,
+                                "horario": horario,
+                                "motorista": motorista,
+                                "placa": placa,
+                                "status": status_traduzido,
+                                "estimado_total": str(int_est),
+                                "coletado_geral": str(int_col),
+                                "restante": restante,
+                                "data": pd.Timestamp.now().strftime('%d/%m/%Y')
+                            })
+                    except Exception:
+                        pass
                         
-                        dados_raspados.append({
-                            "id_rota": id_rota,
-                            "nome_rota": nome_rota,
-                            "cluster": cluster,
-                            "horario": horario,
-                            "motorista": motorista,
-                            "placa": placa,
-                            "status": status_traduzido,
-                            "estimado_total": str(int_est),
-                            "coletado_geral": str(int_col),
-                            "restante": restante,
-                            "data": pd.Timestamp.now().strftime('%d/%m/%Y')
-                        })
-                except Exception:
-                    pass
-                    
-                botao_proximo = page.locator('a[role="link"]:has-text("Próximo"), button:has-text("Próximo"), .andes-pagination__button--next a').first
-                if botao_proximo.count() > 0 and botao_proximo.is_visible():
-                    parent_li = botao_proximo.locator("..")
-                    classes_pai = (parent_li.get_attribute("class") or "").lower()
-                    if "disabled" not in classes_pai and not botao_proximo.is_disabled():
-                        botao_proximo.click(timeout=8000)
-                        aguardar_carregamento_meli(page, tempo_max=10)
-                        pagina_atual += 1
-                        continue
-                break
+                    botao_proximo = page.locator('a[role="link"]:has-text("Próximo"), button:has-text("Próximo"), .andes-pagination__button--next a').first
+                    if botao_proximo.count() > 0 and botao_proximo.is_visible():
+                        parent_li = botao_proximo.locator("..")
+                        classes_pai = (parent_li.get_attribute("class") or "").lower()
+                        if "disabled" not in classes_pai and not botao_proximo.is_disabled():
+                            botao_proximo.click(timeout=8000)
+                            aguardar_carregamento_meli(page, tempo_max=10)
+                            pagina_atual += 1
+                            continue
+                    break
+            finally:
+                # Encerra o aviso de 5 em 5 segundos assim que terminar de ler as páginas
+                parar_aviso_raspagem.set()
                     
             if dados_raspados:
                 log_painel(f"📦 {hub_alvo}: {len(dados_raspados)} rota(s) capturada(s)! Atualizando planilha...")
@@ -749,7 +859,7 @@ def executar_relatorio(page, lista_hubs, ticket):
                             df_combinado = df
                             
                         df_combinado.to_sql('rotas_brutas', con=motor_db, if_exists='replace', index=False)
-                        log_painel(f"✅ Relatório sincronizado com exatidão ({len(df)} linhas processadas sem cortes).")
+                        log_painel(f"✅ Relatório sincronizado ({len(df)} linhas processadas).")
                     except Exception as e:
                         log_painel(f"⚠️ Aviso: Conflito ao mesclar histórico ({e}). Substituindo tabela pela extração atual.")
                         df.to_sql('rotas_brutas', con=motor_db, if_exists='replace', index=False)
@@ -894,8 +1004,8 @@ def iniciar_orquestrador():
                                         elif not res:
                                             sucesso_geral = False
                                     if sucesso_geral:
-                                        log_painel(f"✅ MONITORAMENTO CONCLUÍDO para: {hub_string} ({tipo_ticket.upper()})")
-                                    elif hub_invalido and tipo_ticket == 'avulso':
+                                        log_painel(f"✅ PROCESSO CONCLUÍDO para: {hub_string} ({tipo_ticket.upper()})")
+                                    elif hub_invalido and ticket['tipo'] == 'avulso':
                                         log_painel(f"🗑️ Removendo ticket avulso inválido ({hub_string}) da fila.")
                                         with motor_db.begin() as conn:
                                             conn.execute(
@@ -914,7 +1024,6 @@ def iniciar_orquestrador():
                                     nova_coleta = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                     novo_status = "CONCLUIDO" if tipo_ticket == 'avulso' else "ATIVO"
                                     
-                                    # Atualiza APENAS o ticket do tipo executado (não cancela a Rotina se rodou um Avulso!)
                                     with motor_db.begin() as conn:
                                         conn.execute(text("""
                                             UPDATE tickets_robo 
@@ -931,7 +1040,7 @@ def iniciar_orquestrador():
                         if not ticket_processado:
                             if estado_anterior != "dormindo":
                                 nomes_str = ", ".join(nomes_fila) if nomes_fila else "Nenhum"
-                                log_painel(f"💤 Standby. {qtd_ativos} tarefa(s) na fila: [{nomes_str}].")
+                                log_painel(f"💤 Esperando. {qtd_ativos} tarefa(s) na fila: [{nomes_str}].")
                                 estado_anterior = "dormindo"
                             time.sleep(4)
                             

@@ -40,6 +40,7 @@ let GO_DATA = {
 // CONTROLE DE TELA DE CARREGAMENTO
 // ==========================================
 let contadorRequisicoesLoading = 0;
+let idNavegacaoAtiva = 0;
 let rotasJaCarregadas = false;
 let relatoriosJaCarregados = false;
 let carregandoRotasAgora = false;
@@ -54,8 +55,12 @@ function mostrarLoading(mensagem = "Abrindo tela...") {
     if (overlay) overlay.classList.add('show');
 }
 
-function esconderLoading() {
-    contadorRequisicoesLoading = Math.max(0, contadorRequisicoesLoading - 1);
+function esconderLoading(forcar = false) {
+    if (forcar) {
+        contadorRequisicoesLoading = 0;
+    } else {
+        contadorRequisicoesLoading = Math.max(0, contadorRequisicoesLoading - 1);
+    }
     if (contadorRequisicoesLoading === 0) {
         const overlay = document.getElementById('loading-overlay');
         if (overlay) overlay.classList.remove('show');
@@ -1066,7 +1071,12 @@ function carregarRelatorios(exibirToastRobo = false) {
                 }
                 popularDropdownsHubBI(extrairHubs(rotasBrutas, 'Nome da Rota'));
                 popularDropdownsDataBI(extrairDatasBI(rotasBrutas));
-                aplicarFiltroUnificadoEstatisticas();
+                
+                // Só processa imediatamente se a aba Estatísticas estiver aberta; senão processa quando o usuário entrar nela
+                const abaEstAtiva = document.getElementById('aba-estatisticas')?.classList.contains('ativo');
+                if (abaEstAtiva) {
+                    aplicarFiltroUnificadoEstatisticas();
+                }
                 relatoriosJaCarregados = true;
             }
             if (exibirToastRobo) mostrarToastRobo("Estatísticas e relatórios atualizados pelo robô!");
@@ -1078,7 +1088,23 @@ function carregarRelatorios(exibirToastRobo = false) {
     return promessaRelatorios;
 }
 
-function atualizarBadgeSessaoOkta(statusLogin, roboOnline) {
+let contaOktaAtual = "Vitor.Martins";
+
+function atualizarBadgeSessaoOkta(statusLogin, roboOnline, contaServidor) {
+    if (contaServidor) contaOktaAtual = contaServidor;
+
+    const selectConta = document.getElementById('select-conta-okta');
+    if (selectConta) {
+        if (contaServidor && document.activeElement !== selectConta) {
+            selectConta.value = contaServidor;
+        }
+        // Só permite trocar o login quando estiver no processo de login e validação do Okta!
+        const podeTrocarLogin = (roboOnline && statusLogin === 'AGUARDANDO_OKTA');
+        selectConta.disabled = !podeTrocarLogin;
+        selectConta.style.opacity = podeTrocarLogin ? '1' : '0.55';
+        selectConta.style.cursor = podeTrocarLogin ? 'pointer' : 'not-allowed';
+    }
+
     gerenciarAlertaCaixaMensagens(statusLogin, roboOnline);
     const badge = document.getElementById('badge-status-sessao-okta');
     if (!badge) return;
@@ -1089,16 +1115,34 @@ function atualizarBadgeSessaoOkta(statusLogin, roboOnline) {
     } else if (statusLogin === 'AGUARDANDO_OKTA') {
         badge.style.background = '#f59e0b';
         badge.style.color = '#0f172a';
-        badge.innerText = '📲 AGUARDANDO CÓDIGO OKTA';
+        badge.innerText = `📲 AGUARDANDO OKTA (${contaOktaAtual})`;
     } else if (statusLogin === 'LOGADO') {
         badge.style.background = '#10b981';
         badge.style.color = '#052e16';
-        badge.innerText = '🟢 SESSÃO MELI ATIVA';
+        badge.innerText = `🟢 SESSÃO ATIVA (${contaOktaAtual})`;
     } else {
         badge.style.background = '#334155';
         badge.style.color = '#cbd5e1';
         badge.innerText = '⏳ A VERIFICAR SESSÃO...';
     }
+}
+
+function trocarContaOktaPainel(novaConta) {
+    if (!novaConta) return;
+    fetch(`${API_BASE_URL}/selecionar_conta_okta`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conta: novaConta })
+    }).then(r => r.json()).then(res => {
+        if (res.sucesso) {
+            contaOktaAtual = novaConta;
+            mostrarToastRobo(`👤 Alterando login para ${novaConta}...`);
+        } else {
+            alert(res.erro || "Não foi possível trocar a conta agora.");
+            const selectConta = document.getElementById('select-conta-okta');
+            if (selectConta) selectConta.value = contaOktaAtual;
+        }
+    }).catch(() => alert("Erro de conexão com a API."));
 }
 
 function enviarCodigoOktaPainel() {
@@ -1177,7 +1221,7 @@ function iniciarSistemaAposLogin() {
                 if (ft) ft.style.color = d.robo_online ? "#31D086" : "#ef4444";
                 if (sh) sh.innerHTML = d.robo_online ? '<span style="color:#15803d;">🟢 Robô Online</span>' : '<span style="color:#b91c1c;">🔴 Robô Offline</span>';
 
-                atualizarBadgeSessaoOkta(d.status_login, d.robo_online);
+                atualizarBadgeSessaoOkta(d.status_login, d.robo_online, d.conta_okta);
 
                 if (d.logs && d.logs.length > 0) {
                     let aP = false, aB = false;
@@ -1185,7 +1229,7 @@ function iniciarSistemaAposLogin() {
                     if (tm) {
                         d.logs.forEach(l => {
                             tm.innerHTML += `<span style="color: #31D086;">[${l.hora}] [MOTOR]</span> <span style="color: #e2e8f0;">${l.msg}</span><br>`;
-                            if (l.msg.includes("MONITORAMENTO CONCLUÍDO")) aP = true;
+                            if (l.msg.includes("PROCESSO CONCLUÍDO") || l.msg.includes("MONITORAMENTO CONCLUÍDO")) aP = true;
                             if (l.msg.includes("RELATÓRIO BAIXADO")) aB = true;
 
                             // Se o robô gerou um arquivo para baixar no PC, dispara o download automático!
@@ -2081,12 +2125,18 @@ document.addEventListener('click', function(e) {
     const uM = document.getElementById('userMenu'); if (uM && uM.classList.contains('show') && !e.target.closest('.user-profile')) uM.classList.remove('show');
 });
 async function mudarAba(id, btn) {
+    const minhaNavegacao = ++idNavegacaoAtiva;
+    esconderLoading(true);
     mostrarLoading("Abrindo tela...");
-    await new Promise(r => setTimeout(r, 80));
 
+    // Troca o botão ativo e exibe a aba imediatamente para o menu responder na hora
     document.querySelectorAll('.conteudo-aba, .sidebar-btn').forEach(e => e.classList.remove('ativo'));
     document.getElementById(id).classList.add('ativo');
     if (btn) btn.classList.add('ativo');
+
+    // Dá fôlego para o navegador pintar o loading no centro da área branca e manter a sidebar livre
+    await new Promise(r => setTimeout(r, 60));
+    if (minhaNavegacao !== idNavegacaoAtiva) return;
 
     try {
         if (id === 'aba-monitoramento') {
@@ -2095,6 +2145,7 @@ async function mudarAba(id, btn) {
             } else if (!rotasJaCarregadas || rotasGlobais.length === 0) {
                 await carregarRotas(false);
             }
+            if (minhaNavegacao !== idNavegacaoAtiva) return;
             if (gridApi) {
                 restaurarEstadoColunas();
                 atualizarContadorRotas();
@@ -2104,7 +2155,11 @@ async function mudarAba(id, btn) {
                 await promessaRelatorios;
             } else if (!relatoriosJaCarregados || rotasBrutas.length === 0) {
                 await carregarRelatorios(false);
-            } else if (BI_DATA.raw.length === 0 && rotasBrutas.length > 0) {
+            }
+            if (minhaNavegacao !== idNavegacaoAtiva) return;
+            if (BI_DATA.raw.length === 0 && rotasBrutas.length > 0) {
+                await new Promise(r => setTimeout(r, 50));
+                if (minhaNavegacao !== idNavegacaoAtiva) return;
                 aplicarFiltroUnificadoEstatisticas();
             }
         }
@@ -2112,11 +2167,14 @@ async function mudarAba(id, btn) {
         console.error(e);
     }
 
-    // Aguarda o navegador pintar os KPIs e tabelas na tela antes de fechar o "Abrindo tela..."
+    if (minhaNavegacao !== idNavegacaoAtiva) return;
+
     requestAnimationFrame(() => {
         setTimeout(() => {
-            esconderLoading();
-        }, 250);
+            if (minhaNavegacao === idNavegacaoAtiva) {
+                esconderLoading(true);
+            }
+        }, 150);
     });
 }
 
@@ -2130,8 +2188,11 @@ function navegarPelosCards(idAba, idBotaoSidebar) {
 }
 
 function mudarSubAba(id, btn) {
+    const minhaNavegacao = ++idNavegacaoAtiva;
+    esconderLoading(true);
     mostrarLoading("Abrindo tela...");
     setTimeout(() => {
+        if (minhaNavegacao !== idNavegacaoAtiva) return;
         const aP = btn ? btn.closest('.conteudo-aba') : null;
         if (aP) {
             aP.querySelectorAll('.sub-conteudo, .sub-tab-btn').forEach(e => e.classList.remove('ativo'));
@@ -2143,10 +2204,12 @@ function mudarSubAba(id, btn) {
 
         requestAnimationFrame(() => {
             setTimeout(() => {
-                esconderLoading();
-            }, 200);
+                if (minhaNavegacao === idNavegacaoAtiva) {
+                    esconderLoading(true);
+                }
+            }, 150);
         });
-    }, 80);
+    }, 60);
 }
 function toggleMenu(){ document.getElementById('sidebar').classList.toggle('aberta'); document.getElementById('main-content').classList.toggle('empurrado'); }
 function abrirModalExportacao(){ const lc = document.getElementById('colunas-export-list'); lc.innerHTML = ''; gridApi.getColumns().forEach(c => { let l = document.createElement('label'); l.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; cursor:pointer; color:#334155;'; l.innerHTML = `<input type="checkbox" value="${c.getColId()}" checked style="width:16px; height:16px; accent-color:#1a237e;"> ${c.getColDef().headerName}`; lc.appendChild(l); }); document.getElementById('exportModal').classList.add('show'); }
@@ -2302,6 +2365,17 @@ function carregarTickets(){
     }); 
 }
 
+function formatarDataHoraBR(dataStr) {
+    if (!dataStr || dataStr === 'Aguardando' || dataStr === 'None') return 'Aguardando';
+    const limpa = String(dataStr).trim();
+    // Converte de YYYY-MM-DD HH:MM:SS para DD/MM/YYYY HH:MM:SS
+    const match = limpa.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}:\d{2}:\d{2})$/);
+    if (match) {
+        return `${match[3]}/${match[2]}/${match[1]} ${match[4]}`;
+    }
+    return limpa;
+}
+
 function renderizarFilaTickets() {
     const container = document.getElementById('lista-tickets-container');
     if (!container) return;
@@ -2343,6 +2417,8 @@ function renderizarFilaTickets() {
             badgeOrdem = `<span id="ordem-${idUnico}" style="background:#f8fafc;color:#94a3b8;border:1px solid #e2e8f0;padding:3px 8px;border-radius:12px;font-size:11px;font-weight:700;white-space:nowrap;">—</span>`;
         }
 
+        const ultimaColetaBR = formatarDataHoraBR(t.ultima_coleta);
+
         return `
             <div style="background:#fff;padding:12px;border-left:4px solid ${corBorda};margin-bottom:10px;border-radius:6px;box-shadow:0 1px 3px rgba(0,0,0,0.1);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
                 <div style="flex: 1; min-width: 170px;">
@@ -2350,7 +2426,7 @@ function renderizarFilaTickets() {
                         <b style="color:#1e293b;font-size:14px">${t.hub}</b>
                         ${badgeTipo}
                     </div>
-                    <span style="font-size:11px;color:#64748b">${t.acao.toUpperCase()} | Última: ${t.ultima_coleta}</span>
+                    <span style="font-size:11px;color:#64748b">${t.acao.toUpperCase()} | Última: ${ultimaColetaBR}</span>
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;margin:0 8px;">
                     <div id="count-${idUnico}" style="text-align:center;min-width:135px;">${item.info.htmlStatus}</div>

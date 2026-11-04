@@ -373,7 +373,7 @@ def deletar_ticket(hub: str, acao: str):
         return {}
     
 # ==========================================
-# TELEMETRIA, LOGS E CONTROLO OKTA DO ROBÔ
+# TELEMETRIA, LOGS E CONTROLE DE LOGIN OKTA DO ROBÔ
 # ==========================================
 logs_memoria = []
 total_logs_recebidos = 0
@@ -381,6 +381,8 @@ ultimo_heartbeat = datetime.datetime.now()
 
 codigo_okta_pendente = ""
 forcar_reinicio_login = False
+trocar_conta_pendente = ""
+conta_okta_ativa = "Vitor.Martins"
 status_login_robo = "DESCONHECIDO"
 
 def registrar_log_interno(msg: str):
@@ -416,8 +418,24 @@ async def receber_codigo_okta(request: Request):
     if not cod:
         return {"sucesso": False, "erro": "Código vazio."}
     codigo_okta_pendente = cod
-    registrar_log_interno(f"📲 [PAINEL WEB] Código Okta ({cod}) recebido! Enviando para o robô...")
+    registrar_log_interno(f"📲 [PAINEL WEB] Código Okta ({cod}) recebido para {conta_okta_ativa}! Enviando para o robô...")
     return {"sucesso": True}
+
+@app.post("/selecionar_conta_okta")
+async def selecionar_conta_okta(request: Request):
+    global conta_okta_ativa, trocar_conta_pendente, codigo_okta_pendente, status_login_robo
+    dados = await request.json()
+    nova_conta = str(dados.get("conta", "")).strip()
+    if nova_conta not in ["Vitor.Martins", "Larissa.Campos"]:
+        return {"sucesso": False, "erro": "Conta inválida."}
+    if status_login_robo != "AGUARDANDO_OKTA":
+        return {"sucesso": False, "erro": "A troca de login só pode ser feita durante o processo de login e validação do Okta."}
+    
+    conta_okta_ativa = nova_conta
+    trocar_conta_pendente = nova_conta
+    codigo_okta_pendente = ""
+    registrar_log_interno(f"👤 [PAINEL WEB] Conta alterada para '{nova_conta}'. Ordenando ao robô voltar à tela de login...")
+    return {"sucesso": True, "conta": conta_okta_ativa}
 
 @app.post("/reiniciar_login_robo")
 async def solicitar_reinicio_login():
@@ -429,27 +447,33 @@ async def solicitar_reinicio_login():
 
 @app.get("/obter_comando_okta")
 def obter_comando_okta():
-    global codigo_okta_pendente, forcar_reinicio_login
+    global codigo_okta_pendente, forcar_reinicio_login, trocar_conta_pendente, conta_okta_ativa
     cod = codigo_okta_pendente
     reiniciar = forcar_reinicio_login
+    trocar = trocar_conta_pendente
     # Limpa após leitura do robô para não repetir o mesmo comando
     codigo_okta_pendente = ""
     forcar_reinicio_login = False
+    trocar_conta_pendente = ""
     return {
         "codigo": cod,
-        "reiniciar_login": reiniciar
+        "reiniciar_login": reiniciar,
+        "trocar_conta": trocar,
+        "conta_ativa": conta_okta_ativa
     }
 
 @app.post("/status_login_robo")
 async def atualizar_status_login_robo(request: Request):
-    global status_login_robo
+    global status_login_robo, conta_okta_ativa
     dados = await request.json()
     status_login_robo = str(dados.get("status", "DESCONHECIDO"))
+    if dados.get("conta"):
+        conta_okta_ativa = str(dados.get("conta")).strip()
     return {"sucesso": True}
 
 @app.get("/ler_logs")
 def ler_logs(ultimo_indice: int = 0):
-    global ultimo_heartbeat, total_logs_recebidos, status_login_robo
+    global ultimo_heartbeat, total_logs_recebidos, status_login_robo, conta_okta_ativa
     
     if ultimo_indice > total_logs_recebidos:
         ultimo_indice = 0
@@ -461,7 +485,8 @@ def ler_logs(ultimo_indice: int = 0):
         "logs": novos_logs,
         "novo_indice": total_logs_recebidos, 
         "robo_online": robo_on,
-        "status_login": status_login_robo if robo_on else "OFFLINE"
+        "status_login": status_login_robo if robo_on else "OFFLINE",
+        "conta_okta": conta_okta_ativa
     }   
 
 # ==========================================
