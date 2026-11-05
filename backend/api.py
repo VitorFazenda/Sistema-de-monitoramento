@@ -1,8 +1,10 @@
 import os
 import re
+import time
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 import pandas as pd
 import json
 import datetime
@@ -15,6 +17,9 @@ load_dotenv(caminho_env)
 
 app = FastAPI(title="API - Monitoramento Logístico")
 
+# Comprime respostas grandes (como /rotas_brutas) em até 90%, acelerando o carregamento
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 app.add_middleware(
     CORSMiddleware, 
     allow_origins=["*"], 
@@ -23,10 +28,34 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# Puxa a string de conexão segura do .env
+# Puxa a string de conexão segura do .env com proteção contra queda de conexão
 string_conexao = os.getenv("DATABASE_URL")
 if not string_conexao:
     raise ValueError("ERRO: A variável DATABASE_URL não foi encontrada no ficheiro .env")
+
+motor_db = create_engine(
+    string_conexao,
+    pool_pre_ping=True,
+    pool_recycle=300,
+    pool_size=5,
+    max_overflow=10
+)
+
+# Cache em memória para evitar leitura pesada repetitiva no servidor de 1 vCPU
+CACHE_DADOS = {
+    "rotas": None,
+    "rotas_ts": 0,
+    "rotas_brutas": None,
+    "rotas_brutas_ts": 0
+}
+
+def invalidar_cache_rotas():
+    CACHE_DADOS["rotas"] = None
+    CACHE_DADOS["rotas_ts"] = 0
+
+def invalidar_cache_brutas():
+    CACHE_DADOS["rotas_brutas"] = None
+    CACHE_DADOS["rotas_brutas_ts"] = 0
 
 motor_db = create_engine(string_conexao)
 
@@ -204,16 +233,20 @@ async def salvar_edicao_ocorrencia(request: Request):
                         df_rotas.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
             except Exception:
                 pass
-
+                invalidar_cache_rotas()
         return {"sucesso": True}
     except Exception as e:
         return {"sucesso": False, "erro": str(e)}
 
 # ==========================================
-# ROTAS DO SISTEMA DE MONITORAMENTO E BI
+# ROTAS DO SISTEMA DE MONITORAMENTO
 # ==========================================
 @app.get("/rotas")
 def puxar_rotas():
+    agora = time.time()
+    if CACHE_DADOS["rotas"] is not None and (agora - CACHE_DADOS["rotas_ts"]) < 15:
+        return CACHE_DADOS["rotas"]
+
     try:
         insp = inspect(motor_db)
         if not insp.has_table('rotas_monitoramento'):
@@ -221,6 +254,8 @@ def puxar_rotas():
 
         df = pd.read_sql_table('rotas_monitoramento', con=motor_db).fillna("")
         if df.empty:
+            CACHE_DADOS["rotas"] = []
+            CACHE_DADOS["rotas_ts"] = agora
             return []
 
         for col_obrigatoria in ['monitor', 'ocorrencia', 'revertido', 'observacoes', 'restante', 'status_manual']:
@@ -229,12 +264,10 @@ def puxar_rotas():
 
         df['monitor'] = df['monitor'].astype(str).str.upper().str.strip()
 
-        # Cálculo vetorizado ultrarrápido de pacotes restantes
         est_series = pd.to_numeric(df['estimado_total'].astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce').fillna(0).astype(int)
         col_series = pd.to_numeric(df['coletado_geral'].astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce').fillna(0).astype(int)
         df['restante'] = (est_series - col_series).astype(str)
 
-        # Padronização rápida de status caso haja algum texto antigo do Meli
         st_upper = df['status'].astype(str).str.strip().str.upper()
         mask_sem_ini = st_upper.str.contains("SEM INÍCIO|SEM INICIO", regex=True, na=False)
         mask_andamento = st_upper.str.contains("ANDAMENTO", na=False) | st_upper.isin(["INÍCIO", "INICIO"])
@@ -252,15 +285,28 @@ def puxar_rotas():
             except Exception:
                 pass
 
-        return df.to_dict(orient="records")
+        resultado = df.to_dict(orient="records")
+        CACHE_DADOS["rotas"] = resultado
+        CACHE_DADOS["rotas_ts"] = agora
+        return resultado
     except Exception as e: 
         return {"erro": str(e)}
 
 @app.get("/rotas_brutas")
 def puxar_rotas_brutas():
+    agora = time.time()
+    if CACHE_DADOS["rotas_brutas"] is not None and (agora - CACHE_DADOS["rotas_brutas_ts"]) < 60:
+        return CACHE_DADOS["rotas_brutas"]
+
     try:
+        insp = inspect(motor_db)
+        if not insp.has_table('rotas_brutas'):
+            return []
         df = pd.read_sql_table('rotas_brutas', con=motor_db)
-        return df.fillna("").to_dict(orient="records")
+        resultado = df.fillna("").to_dict(orient="records")
+        CACHE_DADOS["rotas_brutas"] = resultado
+        CACHE_DADOS["rotas_brutas_ts"] = agora
+        return resultado
     except Exception: 
         return []
 
@@ -293,6 +339,7 @@ async def salvar_escala(request: Request):
             df.loc[condicao, 'monitor'] = mon_upper
 
         df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
+        invalidar_cache_rotas()
         return {"sucesso": True}
     except Exception as e: 
         return {"sucesso": False, "erro": str(e)}
@@ -408,6 +455,10 @@ async def receber_log(request: Request):
     dados = await request.json()
     msg = dados.get("mensagem", "")
     registrar_log_interno(msg)
+    if "CONCLUÍDO" in msg or "atualizando planilha" in msg.lower():
+        invalidar_cache_rotas()
+    if "RELATÓRIO BAIXADO" in msg or "Relatório sincronizado" in msg:
+        invalidar_cache_brutas()
     return {"sucesso": True}
 
 @app.post("/enviar_codigo_okta")
@@ -479,8 +530,8 @@ def ler_logs(ultimo_indice: int = 0):
         ultimo_indice = 0
         
     novos_logs = [log for log in logs_memoria if log["indice"] >= ultimo_indice]
-    robo_on = (datetime.datetime.now() - ultimo_heartbeat).total_seconds() < 8
-    
+    robo_on = (datetime.datetime.now() - ultimo_heartbeat).total_seconds() < 25
+
     return {
         "logs": novos_logs,
         "novo_indice": total_logs_recebidos, 
@@ -511,6 +562,7 @@ async def atualizar_cluster(request: Request):
         df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
         return {"sucesso": True}
     except Exception as e: 
+        invalidar_cache_rotas()
         return {"sucesso": False, "erro": str(e)}
 
 @app.post("/atualizar_observacao")
@@ -523,6 +575,7 @@ async def atualizar_obs(request: Request):
             df['observacoes'] = ""
         df.loc[df['id_rota'] == str(dados.get("id_rota")), 'observacoes'] = str(dados.get("observacao"))
         df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
+        invalidar_cache_rotas()
         return {"sucesso": True}
     except Exception: 
         return {}
@@ -537,6 +590,7 @@ async def atualizar_rev(request: Request):
             df['revertido'] = ""
         df.loc[df['id_rota'] == str(dados.get("id_rota")), 'revertido'] = str(dados.get("revertido"))
         df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
+        invalidar_cache_rotas()
         return {"sucesso": True}
     except Exception: 
         return {}
@@ -551,6 +605,7 @@ async def atualizar_ocorrencia_rota(request: Request):
             df['ocorrencia'] = ""
         df.loc[df['id_rota'] == str(dados.get("id_rota")), 'ocorrencia'] = str(dados.get("ocorrencia", "")).strip()
         df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
+        invalidar_cache_rotas()
         return {"sucesso": True}
     except Exception as e: 
         return {"sucesso": False, "erro": str(e)}
@@ -570,6 +625,7 @@ async def atualizar_stat(request: Request):
         df.loc[df['id_rota'] == id_alvo, 'status'] = novo_status
         df.loc[df['id_rota'] == id_alvo, 'status_manual'] = "SIM" if novo_status != "" else ""
         df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
+        invalidar_cache_rotas()
         return {"sucesso": True}
     except Exception: 
         return {}
@@ -595,6 +651,7 @@ async def atualizar_cor(request: Request):
             dict_cores[coluna] = cor
             df.at[idx, 'cores_customizadas'] = json.dumps(dict_cores)
             df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
+            invalidar_cache_rotas()
         return {"sucesso": True}
     except Exception: 
         return {}

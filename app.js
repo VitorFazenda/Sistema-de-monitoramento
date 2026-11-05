@@ -110,23 +110,18 @@ function comparadorDataBR(a, b) {
 }
 
 // ==========================================
-// CAIXA DE MENSAGENS E ALARME SONORO OKTA
+// CAIXA DE MENSAGENS E ALARME SONORO OKTA 
 // ==========================================
 let alertaOktaAtivo = false;
-let ultimoBipOkta = 0;
+let jaApitouNestaExpiracao = false;
 
 function tocarAlarmeSonoroOkta() {
-    const agora = Date.now();
-    // Toca o bip a cada 12 segundos enquanto estiver aguardando o Okta
-    if (agora - ultimoBipOkta < 12000) return;
-    ultimoBipOkta = agora;
-
     try {
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         if (!AudioCtx) return;
         const ctx = new AudioCtx();
 
-        // Toca 2 bips curtos de alerta
+        // Toca 2 bips curtos uma única vez para avisar que pediu Okta
         [0, 0.22].forEach(atraso => {
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
@@ -148,18 +143,18 @@ function gerenciarAlertaCaixaMensagens(statusLogin, roboOnline) {
     if (!btnInbox || !bolinha) return;
 
     if (roboOnline && statusLogin === 'AGUARDANDO_OKTA') {
-        const entrouAgora = !alertaOktaAtivo;
         alertaOktaAtivo = true;
         bolinha.style.display = 'flex';
         btnInbox.classList.add('alerta-ativo');
-        tocarAlarmeSonoroOkta();
 
-        // Se acabou de expirar, já abre o pop-up automaticamente na primeira vez para avisar na hora
-        if (entrouAgora) {
-            abrirModalMensagens();
+        // Apita APENAS UMA VEZ quando pedir o código Okta e NÃO abre o pop-up sozinho!
+        if (!jaApitouNestaExpiracao) {
+            jaApitouNestaExpiracao = true;
+            tocarAlarmeSonoroOkta();
         }
     } else {
         alertaOktaAtivo = false;
+        jaApitouNestaExpiracao = false;
         bolinha.style.display = 'none';
         btnInbox.classList.remove('alerta-ativo');
     }
@@ -1194,14 +1189,18 @@ function iniciarSistemaAposLogin() {
         document.getElementById('label-data-hoje').innerText = dH.split('-').reverse().join('/');
     }
     
-    // Carrega tudo em segundo plano sem exibir tela de carregamento no login!
+    // 1º Prioridade máxima: carrega a fila do Robô e as Rotas imediatamente
+    carregarTickets();
+    carregarCoresCustomizadas();
     carregarMetas();
     carregarEdicoesOcorrencias();
-    carregarCoresCustomizadas();
     carregarRotas(false);
-    carregarRelatorios(false);
-    carregarTickets();
 
+    // 2º Carrega a base pesada de Estatísticas 1,5s depois para não competir com a aba do Robô
+    setTimeout(() => {
+        carregarRelatorios(false);
+    }, 1500);
+    
     setInterval(carregarTickets, 5000);
     setInterval(atualizarCountdowns, 1000);
 

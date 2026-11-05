@@ -426,7 +426,7 @@ def aguardar_carregamento_meli(page, tempo_max=12):
     time.sleep(1.5)
 
 def clicar_limpar_todos_filtros(page):
-    """Clica sempre no botão 'Limpar todos' do Mercado Livre e aguarda a tela estabilizar"""
+    """Clica no botão 'Limpar todos' do Mercado Livre uma única vez e aguarda estabilizar"""
     seletores_limpar = [
         'button.button-link__button:has(span:has-text("Limpar todos"))',
         'span.andes-typography:has-text("Limpar todos")',
@@ -441,7 +441,7 @@ def clicar_limpar_todos_filtros(page):
                 aguardar_carregamento_meli(page, tempo_max=10)
                 return True
         except Exception:
-            pass
+            continue
     return False
 
 def executar_raspagem(page, hub_alvo):
@@ -523,13 +523,12 @@ def executar_raspagem(page, hub_alvo):
             else:
                 log_painel("🌎 Filtros limpos! Raspando TODAS as rotas disponíveis no sistema.")
 
-            # Inicia o aviso periódico "Robô raspando rotas" a cada 5 segundos enquanto lê as páginas
+            # Exibe o aviso inicial e repete apenas a cada 60 segundos enquanto estiver raspando
             parar_aviso_raspagem = threading.Event()
             def loop_aviso_raspando():
-                while not parar_aviso_raspagem.is_set():
+                log_painel("🤖 Robô raspando rotas...")
+                while not parar_aviso_raspagem.wait(60.0):
                     log_painel("🤖 Robô raspando rotas...")
-                    if parar_aviso_raspagem.wait(5.0):
-                        break
 
             thread_aviso = threading.Thread(target=loop_aviso_raspando, daemon=True)
             thread_aviso.start()
@@ -912,7 +911,7 @@ def executar_relatorio(page, lista_hubs, ticket):
     return False
 
 # ==========================================
-# CÉREBRO DO ORQUESTRADOR (COM ORDEM DE FILA E ROTINA + AVULSO)
+# CÉREBRO DO ORQUESTRADOR 
 # ==========================================
 def iniciar_orquestrador():
     threading.Thread(target=daemon_heartbeat, daemon=True).start()
@@ -930,12 +929,16 @@ def iniciar_orquestrador():
         "--mute-audio"
     ]
 
+    primeiro_boot = True
+
     while True:
         try:
             limpar_travas_sessao()
             with sync_playwright() as p:
                 modo_str = "HEADLESS (Servidor)" if HEADLESS_MODE else "INTERFACE VISÍVEL (Local)"
-                log_painel(f"🤖 ROBÔ INICIADO | Modo: {modo_str}")
+                if primeiro_boot:
+                    log_painel(f"🤖 ROBÔ INICIADO | Modo: {modo_str}")
+                    primeiro_boot = False
                 
                 navegador = p.chromium.launch_persistent_context(
                     user_data_dir=PASTA_SESSAO, 
@@ -949,6 +952,7 @@ def iniciar_orquestrador():
                 )
                 page = navegador.pages[0] if navegador.pages else navegador.new_page()
                 estado_anterior = ""
+                tarefas_desde_ultimo_reset = 0
                 
                 garantir_login(page, forcar_recarregamento=True)
                 
@@ -967,7 +971,6 @@ def iniciar_orquestrador():
                         qtd_ativos = len(ativos)
                         nomes_fila = [f"{r['hub']} ({r['tipo'].upper()})" for _, r in ativos.iterrows()]
 
-                        # Filtra todos os tickets que devem rodar agora e ordena: 1º Avulsos, 2º Rotinas
                         prontos_para_rodar = []
                         for index, row in ativos.iterrows():
                             t_dict = row.to_dict()
@@ -1005,7 +1008,7 @@ def iniciar_orquestrador():
                                             sucesso_geral = False
                                     if sucesso_geral:
                                         log_painel(f"✅ PROCESSO CONCLUÍDO para: {hub_string} ({tipo_ticket.upper()})")
-                                    elif hub_invalido and ticket['tipo'] == 'avulso':
+                                    elif hub_invalido and tipo_ticket == 'avulso':
                                         log_painel(f"🗑️ Removendo ticket avulso inválido ({hub_string}) da fila.")
                                         with motor_db.begin() as conn:
                                             conn.execute(
@@ -1032,12 +1035,21 @@ def iniciar_orquestrador():
                                         """), {"uc": nova_coleta, "st": novo_status, "h": hub_string, "a": acao, "t": tipo_ticket})
                                     
                                     ticket_processado = True
+                                    tarefas_desde_ultimo_reset += 1
                                     break 
                                     
                             except Exception as e:
                                 log_painel(f"❌ Erro crítico ao processar ticket: {e}")
                                 
                         if not ticket_processado:
+                            # Se já executou 12 tarefas seguidas e agora a fila está em espera, recicla a memória RAM do Chromium!
+                            if tarefas_desde_ultimo_reset >= 12:
+                                try:
+                                    navegador.close()
+                                except Exception:
+                                    pass
+                                break
+
                             if estado_anterior != "dormindo":
                                 nomes_str = ", ".join(nomes_fila) if nomes_fila else "Nenhum"
                                 log_painel(f"💤 Esperando. {qtd_ativos} tarefa(s) na fila: [{nomes_str}].")
@@ -1049,7 +1061,7 @@ def iniciar_orquestrador():
                         time.sleep(5)
                         
         except Exception as e_outer:
-            log_painel(f"🔄 Reiniciando motor do navegador após falha ({e_outer})...")
+            log_painel(f"🔄 Reiniciando motor do navegador ({e_outer})...")
             time.sleep(5)
 
 if __name__ == "__main__":
