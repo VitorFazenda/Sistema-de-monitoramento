@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sistema de Monitoramento Corporativo</title>
+    <title>Monitoramento JM</title>
+    <link rel="icon" type="image/png" href="logo.png">
+    <link rel="shortcut icon" type="image/png" href="logo.png">
     
     <!-- Bibliotecas Externas -->
     <script src="https://cdn.jsdelivr.net/npm/ag-grid-community/dist/ag-grid-community.min.js"></script>
@@ -554,19 +556,46 @@
                     </div>
 
                     <!-- SECÇÃO DE OCORRÊNCIAS SEPARADAS ESTILO TABELA DINÂMICA -->
-                    <div class="bi-section" style="padding: 16px 20px; background: #fff; border: 1px solid #dde3ef; border-radius: 10px; margin-bottom: 15px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 10px; border-bottom: 2px solid #f0f3f9; padding-bottom: 10px;">
+                    <div class="bi-section" style="padding: 16px 20px; background: #fff; border: 1px solid #dde3ef; border-radius: 10px; margin-bottom: 15px; overflow: visible;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 12px; border-bottom: 2px solid #f0f3f9; padding-bottom: 10px;">
                             <div>
                                 <h3 style="margin: 0; color: #0d1b3e; font-size: 15px; text-transform: uppercase; letter-spacing: 0.3px;">🚨 RESUMO DE GERAL DAS OCORRÊNCIAS</h3>
-                                <p style="margin: 3px 0 0 0; font-size: 12px; color: #64748b;">Lista de ocorrências e sua ofensas acima de 100 pacotes</p>
+                                <p style="margin: 3px 0 0 0; font-size: 12px; color: #64748b;">Lista de ocorrências e suas ofensas por motivo e status de reversão</p>
                             </div>
-                            <div style="display: flex; align-items: center; gap: 10px;">
-                                <label style="font-size: 12px; font-weight: 600; color: #4a5a7a;">Filtro de Corte:</label>
-                                <select id="go-filtro-corte-pcts" onchange="renderizarGeralOperacao()" style="padding: 5px 10px; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 12px; font-weight: bold; color: #1a237e; cursor: pointer;">
-                                    <option value="100" selected>Acima de 100 pacotes (Críticas)</option>
-                                    <option value="50">Acima de 50 pacotes</option>
-                                    <option value="0">Mostrar todas as rotas com ocorrência</option>
-                                </select>
+                            <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                                <!-- 1. FILTRO DE QUAIS CARDS MOSTRAR -->
+                                <div class="go-cards-filter-dropdown" style="position: relative;">
+                                    <button type="button" onclick="toggleMenuFiltroCardsGO(event)" style="padding: 6px 12px; border-radius: 6px; border: 1px solid #cbd5e1; background: #f8fafc; color: #1a237e; font-size: 12px; font-weight: 800; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                                        📌 Selecionar Cards (<span id="go-contador-cards-visiveis">Todos</span>) ▼
+                                    </button>
+                                    <div id="go-menu-filtro-cards" class="go-cards-dropdown-menu">
+                                        <div style="display: flex; gap: 8px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #e2e8f0;">
+                                            <button type="button" onclick="marcarTodosCardsGO(true)" style="flex: 1; padding: 4px 8px; font-size: 11px; font-weight: 700; border-radius: 4px; border: 1px solid #a5d6a7; background: #f0fdf4; color: #15803d; cursor: pointer;">Marcar Todos</button>
+                                            <button type="button" onclick="marcarTodosCardsGO(false)" style="flex: 1; padding: 4px 8px; font-size: 11px; font-weight: 700; border-radius: 4px; border: 1px solid #fecaca; background: #fef2f2; color: #dc2626; cursor: pointer;">Limpar</button>
+                                        </div>
+                                        <div id="go-lista-checkboxes-cards" style="display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow-y: auto;"></div>
+                                    </div>
+                                </div>
+
+                                <!-- 2. FILTRO DE ROTAS REVERTIDAS / NÃO REVERTIDAS / TODAS -->
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <label style="font-size: 12px; font-weight: 600; color: #4a5a7a;">Status das Rotas:</label>
+                                    <select id="go-filtro-status-revertido" onchange="renderizarGeralOperacao()" style="padding: 5px 10px; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 12px; font-weight: bold; color: #1a237e; cursor: pointer; background: #fff;">
+                                        <option value="TODAS" selected>Todas as rotas</option>
+                                        <option value="REVERTIDAS">Apenas rotas revertidas (SIM)</option>
+                                        <option value="NAO_REVERTIDAS">Apenas rotas não revertidas (NÃO)</option>
+                                    </select>
+                                </div>
+
+                                <!-- 3. FILTRO DE CORTE DE PACOTES -->
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <label style="font-size: 12px; font-weight: 600; color: #4a5a7a;">Filtro de Corte:</label>
+                                    <select id="go-filtro-corte-pcts" onchange="renderizarGeralOperacao()" style="padding: 5px 10px; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 12px; font-weight: bold; color: #1a237e; cursor: pointer; background: #fff;">
+                                        <option value="100" selected>Acima de 100 pacotes (Críticas)</option>
+                                        <option value="50">Acima de 50 pacotes</option>
+                                        <option value="0">Mostrar todas as rotas com ocorrência</option>
+                                    </select>
+                                </div>
                             </div>
                         </div>
 

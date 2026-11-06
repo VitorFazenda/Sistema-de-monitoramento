@@ -403,14 +403,14 @@ def traduzir_status_meli(status_bruto: str, coletados_int: int) -> str:
     st = str(status_bruto or "").strip().upper()
     if "SEM INÍCIO" in st or "SEM INICIO" in st or st == "PENDENTE DE LOGIN":
         return "PENDENTE DE LOGIN"
-    if "ANDAMENTO" in st or "INÍCIO" in st or "INICIO" in st or st == "LOGADO":
-        return "LOGADO"
+    if "ANDAMENTO" in st or "INÍCIO" in st or "INICIO" in st or st in ["LOGADO", "COLETANDO"]:
+        return "COLETANDO" if coletados_int > 0 else "LOGADO"
     if "CONCLU" in st or st in ["FINALIZADA", "FINALIZADO", "CANCELADA"]:
         return "FINALIZADA" if coletados_int > 0 else "CANCELADA"
     return st if st else "PENDENTE DE LOGIN"
 
 # ==========================================
-# MÓDULO 1: RASPAGEM DE MONITORAMENTO 
+# MÓDULO 1: RASPAGEM DE MONITORAMENTO (SCROLL PROGRESSIVO + PAGINAÇÃO COMPLETA)
 # ==========================================
 def aguardar_carregamento_meli(page, tempo_max=12):
     """Aguarda os spinners do Mercado Livre sumirem após limpar ou aplicar filtros"""
@@ -445,6 +445,123 @@ def clicar_limpar_todos_filtros(page):
             continue
     return False
 
+def extrair_cards_visiveis_js(page, hub_alvo):
+    """Lê todos os cards renderizados na página instantaneamente via JavaScript no navegador"""
+    try:
+        return page.evaluate("""(hubAlvo) => {
+            const cards = Array.from(document.querySelectorAll('div.list > div.monitoring-row, div.monitoring-row'));
+            const resultados = [];
+            cards.forEach((linha) => {
+                const higher = linha.querySelector('.monitoring-row-higher') || linha;
+                const textoCompleto = linha.innerText || linha.textContent || '';
+
+                const nomeEl = higher.querySelector('p.monitoring-row-higher-details__text.bold');
+                let nomeRota = nomeEl ? (nomeEl.textContent || '').replace('Rota ', '').trim() : '';
+                if (nomeRota.toUpperCase().includes('NÃO PLANEJADA') || nomeRota.toUpperCase().includes('NAO PLANEJADA')) {
+                    const pref = (hubAlvo && hubAlvo !== 'TODOS') ? hubAlvo : 'AVULSA';
+                    nomeRota = `${pref}_ROTA_AVULSA`;
+                }
+
+                const idEl = linha.querySelector('.button-copy__text');
+                let idBruto = idEl ? (idEl.textContent || '') : '';
+                if (!idBruto) {
+                    const mId = textoCompleto.match(/Rota\\s*ID:\\s*(\\d+)/i);
+                    if (mId) idBruto = mId[1];
+                }
+                const idRota = idBruto.replace(/[^0-9]/g, '');
+                if (!idRota) return;
+
+                const motEl = higher.querySelector('[data-testid="carrier-or-driver-name"]');
+                const motorista = motEl ? (motEl.textContent || '').trim() : '';
+
+                let placa = '';
+                const placaEl = linha.querySelector('.monitoring-row-lower-details.vehicle p');
+                if (placaEl) {
+                    placa = (placaEl.textContent || '').split('|')[0].trim();
+                }
+
+                const horEl = higher.querySelector(".monitoring-row-higher-details.eta p, div[data-testid='active-route-eta'] p");
+                const horario = horEl ? (horEl.textContent || '').trim() : 'Sem Horário';
+
+                const mCol = textoCompleto.match(/(\\d[\\d\\.]*)\\s*(?:pacotes\\s*)?coletados/i);
+                const coletados = mCol ? mCol[1].replace(/\\D/g, '') : '0';
+
+                const mEst = textoCompleto.match(/(\\d[\\d\\.]*)\\s*(?:pacotes\\s*)?estimados/i);
+                const estimados = mEst ? mEst[1].replace(/\\D/g, '') : '0';
+
+                const stEl = higher.querySelector('.status-main p.bold, .monitoring-row-higher-details.status p.bold');
+                const statusBruto = stEl ? (stEl.textContent || '').trim() : 'Sem início';
+
+                resultados.push({
+                    id_rota: idRota,
+                    nome_rota: nomeRota,
+                    motorista: motorista,
+                    placa: placa,
+                    horario: horario,
+                    coletados: coletados,
+                    estimados: estimados,
+                    status_bruto: statusBruto
+                });
+            });
+            return resultados;
+        }""", hub_alvo)
+    except Exception:
+        return []
+
+def obter_total_rotas_painel_meli(page) -> int:
+    """Lê o contador oficial de Rotas no topo da página do Mercado Livre (ex: 191)"""
+    try:
+        total = page.evaluate("""() => {
+            const stats = document.querySelector('.stats');
+            if (!stats) return 0;
+            const texto = stats.innerText || '';
+            const m = texto.match(/Rotas[\\s\\n]+(\\d[\\d\\.]*)/i);
+            if (m && m[1]) return parseInt(m[1].replace(/\\D/g, ''), 10) || 0;
+            return 0;
+        }""")
+        return int(total or 0)
+    except Exception:
+        return 0
+
+def ir_para_proxima_pagina_meli(page, proxima_pag: int) -> bool:
+    """Tenta avançar para a próxima página usando os botões Seguinte/Próximo ou número da página"""
+    try:
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        time.sleep(0.8)
+
+        clicou = page.evaluate("""(numPag) => {
+            const nav = document.querySelector('nav[aria-label*="Pagina" i], ul.andes-pagination, .andes-pagination');
+            if (!nav) return false;
+
+            // 1. Tenta pelo botão 'Seguinte' / 'Próximo' / '--next'
+            const liNext = nav.querySelector('.andes-pagination__button--next');
+            if (liNext && !liNext.classList.contains('andes-pagination__button--disabled')) {
+                const alvo = liNext.querySelector('a, button') || liNext;
+                if (alvo && alvo.getAttribute('aria-disabled') !== 'true' && !alvo.disabled) {
+                    alvo.scrollIntoView({ block: 'center' });
+                    alvo.click();
+                    return true;
+                }
+            }
+
+            // 2. Fallback: procura o botão numérico exato da próxima página (ex: '2', '3', '4')
+            const botoes = Array.from(nav.querySelectorAll('a, button, li.andes-pagination__button'));
+            for (const b of botoes) {
+                const txt = (b.innerText || b.textContent || '').trim();
+                if (txt === String(numPag)) {
+                    const clicavel = b.querySelector('a, button') || b;
+                    clicavel.scrollIntoView({ block: 'center' });
+                    clicavel.click();
+                    return true;
+                }
+            }
+            return false;
+        }""", proxima_pag)
+
+        return bool(clicou)
+    except Exception:
+        return False
+
 def executar_raspagem(page, hub_alvo):
     for tentativa in range(2):
         try:
@@ -478,7 +595,6 @@ def executar_raspagem(page, hub_alvo):
                 combo_deposito = page.locator('button.compact-selector__trigger[aria-label="Depósito"], button[role="combobox"][aria-label="Depósito"]').first
                 combo_deposito.wait_for(state="visible", timeout=20000)
 
-                # Abre o menu Depósito
                 if combo_deposito.get_attribute("aria-expanded") != "true":
                     combo_deposito.click(timeout=10000)
                     time.sleep(1.5)
@@ -496,7 +612,6 @@ def executar_raspagem(page, hub_alvo):
                     page.keyboard.press("Escape")
                     return "HUB_INVALIDO"
 
-                # Clica diretamente no item da lista (li[role="option"]) e garante que ficou aria-selected="true"
                 if opcao_hub.get_attribute("aria-selected") != "true":
                     opcao_hub.click(timeout=5000)
                     time.sleep(0.8)
@@ -506,7 +621,6 @@ def executar_raspagem(page, hub_alvo):
                             chk_box.click(force=True)
                             time.sleep(0.8)
 
-                # Clica no botão Aplicar e aguarda o Mercado Livre carregar as rotas do HUB
                 btn_aplicar = page.locator('.compact-selector__footer button:has-text("Aplicar"), button:has(span[data-andes-button-content="true"]:has-text("Aplicar"))').first
                 if btn_aplicar.count() > 0 and btn_aplicar.is_visible() and not btn_aplicar.is_disabled():
                     btn_aplicar.click(timeout=8000)
@@ -515,7 +629,6 @@ def executar_raspagem(page, hub_alvo):
                     page.keyboard.press("Escape")
                     time.sleep(2)
 
-                # Valida se a tag do HUB realmente apareceu dentro do botão Depósito
                 tags_aplicadas = [t.strip().upper() for t in combo_deposito.locator('.andes-tag__label').all_inner_texts()]
                 if hub_alvo.upper() not in tags_aplicadas:
                     log_painel(f"⚠️ Filtro {hub_alvo} não fixou na 1ª tentativa (tags atuais: {tags_aplicadas}). Repetindo seleção...")
@@ -534,99 +647,96 @@ def executar_raspagem(page, hub_alvo):
             thread_aviso = threading.Thread(target=loop_aviso_raspando, daemon=True)
             thread_aviso.start()
 
-            dados_raspados = []
+            mapa_rotas_capturadas = {}
             pagina_atual = 1
             seletor_cards = "div.list div.monitoring-row, div.monitoring-row, div.monitoring-row-higher"
+            data_hoje_str = pd.Timestamp.now().strftime('%d/%m/%Y')
             
             try:
+                page.wait_for_selector(seletor_cards, timeout=20000)
+                total_esperado = obter_total_rotas_painel_meli(page)
+
                 while True:
-                    try:
-                        page.wait_for_selector(seletor_cards, timeout=20000)
-                        time.sleep(1.0)
-                        linhas_rotas = page.locator("div.list > div.monitoring-row").all()
-                        if not linhas_rotas:
-                            linhas_rotas = page.locator("div.monitoring-row").all()
-                        if not linhas_rotas:
-                            linhas_rotas = page.locator("div.monitoring-row-higher").all()
+                    # Faz rolagem progressiva na página atual para forçar o Meli a renderizar 100% dos cards da página
+                    page.evaluate("window.scrollTo(0, 0)")
+                    time.sleep(0.6)
 
-                        for linha in linhas_rotas:
-                            texto_card_completo = linha.text_content() or ""
-
-                            nome_el = linha.locator("p.monitoring-row-higher-details__text.bold").first
-                            nome_bruto = (nome_el.text_content() or "") if nome_el.count() > 0 else ""
-                            nome_rota = nome_bruto.replace("Rota ", "").strip()
-                            
-                            if "NÃO PLANEJADA" in nome_rota.upper() or "NAO PLANEJADA" in nome_rota.upper():
-                                prefixo_hub = hub_alvo if hub_alvo != "TODOS" else "AVULSA"
-                                nome_rota = f"{prefixo_hub}_ROTA_AVULSA"
-
-                            id_el = linha.locator(".button-copy__text").first
-                            id_bruto = (id_el.text_content() or "") if id_el.count() > 0 else ""
-                            id_rota = re.sub(r'[^0-9]', '', id_bruto)
-                            if not id_rota:
-                                continue
-
-                            mot_el = linha.locator('[data-testid="carrier-or-driver-name"]').first
-                            motorista = (mot_el.text_content() or "").strip() if mot_el.count() > 0 else ""
-
-                            placa = ""
-                            try:
-                                placa_el = linha.locator(".monitoring-row-lower-details.vehicle p").first
-                                if placa_el.count() > 0:
-                                    placa_bruta = placa_el.text_content() or ""
-                                    placa = placa_bruta.split("|")[0].strip()
-                            except Exception:
-                                placa = ""
-
-                            horario_el = linha.locator(".monitoring-row-higher-details.eta p, div[data-testid='active-route-eta'] p").first
-                            horario = (horario_el.text_content() or "").strip() if horario_el.count() > 0 else "Sem Horário"
-
-                            match_col = re.search(r'(\d[\d\.]*)\s*(?:pacotes\s*)?coletados', texto_card_completo, re.IGNORECASE)
-                            coletados = re.sub(r'\D', '', match_col.group(1)) if match_col else "0"
-
-                            match_est = re.search(r'(\d[\d\.]*)\s*(?:pacotes\s*)?estimados', texto_card_completo, re.IGNORECASE)
-                            estimados = re.sub(r'\D', '', match_est.group(1)) if match_est else "0"
-
-                            int_est = int(estimados) if estimados.isdigit() else 0
-                            int_col = int(coletados) if coletados.isdigit() else 0
+                    for passo_scroll in range(12):
+                        lote_visivel = extrair_cards_visiveis_js(page, hub_alvo)
+                        for item in lote_visivel:
+                            id_r = item["id_rota"]
+                            int_est = int(item["estimados"]) if str(item["estimados"]).isdigit() else 0
+                            int_col = int(item["coletados"]) if str(item["coletados"]).isdigit() else 0
                             restante = str(int_est - int_col)
-
-                            status_el = linha.locator(".status-main p.bold, .monitoring-row-higher-details.status p.bold").first
-                            status_meli_bruto = (status_el.text_content() or "").strip() if status_el.count() > 0 else "Sem início"
-                            status_traduzido = traduzir_status_meli(status_meli_bruto, int_col)
-
-                            match_cluster = re.search(r'_(C\d+)_', nome_rota)
+                            status_traduzido = traduzir_status_meli(item["status_bruto"], int_col)
+                            match_cluster = re.search(r'_(C\d+)_', item["nome_rota"])
                             cluster = match_cluster.group(1) if match_cluster else "Sem Cluster"
-                            
-                            dados_raspados.append({
-                                "id_rota": id_rota,
-                                "nome_rota": nome_rota,
+
+                            mapa_rotas_capturadas[id_r] = {
+                                "id_rota": id_r,
+                                "nome_rota": item["nome_rota"],
                                 "cluster": cluster,
-                                "horario": horario,
-                                "motorista": motorista,
-                                "placa": placa,
+                                "horario": item["horario"],
+                                "motorista": item["motorista"],
+                                "placa": item["placa"],
                                 "status": status_traduzido,
                                 "estimado_total": str(int_est),
                                 "coletado_geral": str(int_col),
                                 "restante": restante,
-                                "data": pd.Timestamp.now().strftime('%d/%m/%Y')
-                            })
-                    except Exception:
-                        pass
-                        
-                    botao_proximo = page.locator('a[role="link"]:has-text("Próximo"), button:has-text("Próximo"), .andes-pagination__button--next a').first
-                    if botao_proximo.count() > 0 and botao_proximo.is_visible():
-                        parent_li = botao_proximo.locator("..")
-                        classes_pai = (parent_li.get_attribute("class") or "").lower()
-                        if "disabled" not in classes_pai and not botao_proximo.is_disabled():
-                            botao_proximo.click(timeout=8000)
-                            aguardar_carregamento_meli(page, tempo_max=10)
-                            pagina_atual += 1
-                            continue
+                                "data": data_hoje_str
+                            }
+
+                        # Rola a janela e também a div.list (caso tenha barra de rolagem própria)
+                        chegou_ao_fim = page.evaluate("""() => {
+                            const lista = document.querySelector('div.list');
+                            if (lista && lista.scrollHeight > lista.clientHeight + 20) {
+                                lista.scrollBy(0, 650);
+                            }
+                            const antes = window.scrollY;
+                            window.scrollBy(0, 650);
+                            return (window.innerHeight + window.scrollY) >= (document.body.scrollHeight - 15) && (window.scrollY === antes);
+                        }""")
+                        time.sleep(0.35)
+                        if chegou_ao_fim and passo_scroll >= 3:
+                            break
+
+                    # Captura final no rodapé da página atual
+                    for item in extrair_cards_visiveis_js(page, hub_alvo):
+                        id_r = item["id_rota"]
+                        int_est = int(item["estimados"]) if str(item["estimados"]).isdigit() else 0
+                        int_col = int(item["coletados"]) if str(item["coletados"]).isdigit() else 0
+                        restante = str(int_est - int_col)
+                        status_traduzido = traduzir_status_meli(item["status_bruto"], int_col)
+                        match_cluster = re.search(r'_(C\d+)_', item["nome_rota"])
+                        cluster = match_cluster.group(1) if match_cluster else "Sem Cluster"
+                        mapa_rotas_capturadas[id_r] = {
+                            "id_rota": id_r,
+                            "nome_rota": item["nome_rota"],
+                            "cluster": cluster,
+                            "horario": item["horario"],
+                            "motorista": item["motorista"],
+                            "placa": item["placa"],
+                            "status": status_traduzido,
+                            "estimado_total": str(int_est),
+                            "coletado_geral": str(int_col),
+                            "restante": restante,
+                            "data": data_hoje_str
+                        }
+
+                    # Se já atingiu o total esperado pelo Meli ou passou de 30 páginas, encerra a paginação
+                    if (total_esperado > 0 and len(mapa_rotas_capturadas) >= total_esperado) or pagina_atual >= 30:
+                        break
+
+                    # Tenta avançar para a próxima página (Página 2, 3, 4...)
+                    if ir_para_proxima_pagina_meli(page, pagina_atual + 1):
+                        pagina_atual += 1
+                        aguardar_carregamento_meli(page, tempo_max=10)
+                        continue
                     break
             finally:
-                # Encerra o aviso de 5 em 5 segundos assim que terminar de ler as páginas
                 parar_aviso_raspagem.set()
+
+            dados_raspados = list(mapa_rotas_capturadas.values())
                     
             if dados_raspados:
                 log_painel(f"📦 {hub_alvo}: {len(dados_raspados)} rota(s) capturada(s)! Atualizando planilha...")
@@ -682,8 +792,9 @@ def executar_raspagem(page, hub_alvo):
 
                             st_antigo = str(df_antigo_hoje.at[idx, 'status'] or '').upper().strip()
                             foi_manual = str(df_antigo_hoje.at[idx, 'status_manual'] or '').upper().strip() == "SIM"
-                            status_exclusivo_manual = st_antigo in ["DECLÍNIO", "DECLINIO", "COLETANDO"]
+                            status_exclusivo_manual = st_antigo in ["DECLÍNIO", "DECLINIO"]
 
+                            # Preserva o status antigo apenas se foi alterado manualmente pelo time (ou Declínio)
                             if foi_manual or status_exclusivo_manual:
                                 df_novo.at[idx, 'status'] = st_antigo
 
@@ -720,7 +831,6 @@ def executar_raspagem(page, hub_alvo):
                 
                 return True
             else:
-                # Se veio 0 rotas na Tentativa 1, faz uma releitura completa na Tentativa 2 para garantir que a página não estava apenas carregando!
                 if tentativa == 0:
                     log_painel(f"⏳ {hub_alvo}: 0 rotas lidas na 1ª verificação. Realizando confirmação de segurança...")
                     continue

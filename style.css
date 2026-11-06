@@ -617,7 +617,7 @@ html, body { height: 100%; margin: 0; padding: 0; font-family: 'Segoe UI', Tahom
 }
 
 /* ========================================== */
-/* TOAST DISCRETO DO ROBÔ (CANTO SUP. DIREITO)*/
+/* TOAST DISCRETO DO ROBÔ (CANTO SUP. DIREITO)
 /* ========================================== */
 .toast-robo {
     position: fixed;
@@ -646,7 +646,7 @@ html, body { height: 100%; margin: 0; padding: 0; font-family: 'Segoe UI', Tahom
 }
 
 /* ========================================== */
-/* QUADRADO VERDE (REVERTIDOS) E GAVETA ROTAS */
+/* QUADRADO VERDE (REVERTIDOS) E GAVETA ROTAS 
 /* ========================================== */
 .go-occ-rev-square {
     background: #16a34a;
@@ -736,7 +736,7 @@ html, body { height: 100%; margin: 0; padding: 0; font-family: 'Segoe UI', Tahom
 }
 
 /* ========================================== */
-/* CARREGANDO INFORMAÇÕES (APENAS ÁREA VAZIA) */
+/* CARREGANDO INFORMAÇÕES 
 /* ========================================== */
 .inline-loading-overlay {
     display: none;
@@ -753,4 +753,39 @@ html, body { height: 100%; margin: 0; padding: 0; font-family: 'Segoe UI', Tahom
 }
 .inline-loading-overlay.show {
     display: flex;
+}
+
+/* ========================================== */
+/* MENU DROPDOWN DE FILTRO DE CARDS     
+/* ========================================== */
+.go-cards-dropdown-menu {
+    display: none;
+    position: absolute;
+    top: 112%;
+    left: 0;
+    min-width: 260px;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 10px 12px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.18);
+    z-index: 2500;
+}
+.go-cards-dropdown-menu.show {
+    display: block;
+}
+.go-card-chk-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #1e293b;
+    cursor: pointer;
+    padding: 3px 4px;
+    border-radius: 4px;
+    user-select: none;
+}
+.go-card-chk-label:hover {
+    background: #f1f5f9;
 }

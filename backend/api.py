@@ -267,7 +267,7 @@ async def salvar_edicao_ocorrencia(request: Request):
         return {"sucesso": False, "erro": str(e)}
 
 # ==========================================
-# ROTAS DO SISTEMA DE MONITORAMENTO E BI (INSTANTÂNEAS)
+# ROTAS DO SISTEMA DE MONITORAMENTO E BI 
 # ==========================================
 def construir_json_rotas() -> str:
     insp = inspect(motor_db)
@@ -291,14 +291,27 @@ def construir_json_rotas() -> str:
     df['restante'] = (est_series - col_series).astype(str)
 
     st_upper = df['status'].astype(str).str.strip().str.upper()
-    mask_sem_ini = st_upper.str.contains("SEM INÍCIO|SEM INICIO", regex=True, na=False)
-    mask_andamento = st_upper.str.contains("ANDAMENTO", na=False) | st_upper.isin(["INÍCIO", "INICIO"])
-    mask_concluida = st_upper.str.contains("CONCLU", na=False)
+    manual_upper = df['status_manual'].astype(str).str.strip().str.upper()
+    nao_manual = manual_upper != "SIM"
+
+    mask_sem_ini = nao_manual & st_upper.str.contains("SEM INÍCIO|SEM INICIO", regex=True, na=False)
+    mask_andamento = nao_manual & (st_upper.str.contains("ANDAMENTO", na=False) | st_upper.isin(["INÍCIO", "INICIO", "LOGADO", "COLETANDO"]))
+    mask_concluida = nao_manual & st_upper.str.contains("CONCLU", na=False)
     mask_finalizado = st_upper == "FINALIZADO"
 
-    if mask_sem_ini.any() or mask_andamento.any() or mask_concluida.any() or mask_finalizado.any():
+    # Se não teve alteração manual e está LOGADO/EM ANDAMENTO com pacotes coletados > 0, vira COLETANDO!
+    precisa_atualizar_status = (
+        mask_sem_ini.any() or
+        (mask_andamento & (col_series > 0) & (st_upper != "COLETANDO")).any() or
+        (mask_andamento & (col_series <= 0) & (st_upper != "LOGADO")).any() or
+        mask_concluida.any() or
+        mask_finalizado.any()
+    )
+
+    if precisa_atualizar_status:
         df.loc[mask_sem_ini, 'status'] = "PENDENTE DE LOGIN"
-        df.loc[mask_andamento, 'status'] = "LOGADO"
+        df.loc[mask_andamento & (col_series > 0), 'status'] = "COLETANDO"
+        df.loc[mask_andamento & (col_series <= 0), 'status'] = "LOGADO"
         df.loc[mask_concluida & (col_series > 0), 'status'] = "FINALIZADA"
         df.loc[mask_concluida & (col_series <= 0), 'status'] = "CANCELADA"
         df.loc[mask_finalizado, 'status'] = "FINALIZADA"

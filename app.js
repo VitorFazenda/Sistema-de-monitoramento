@@ -717,6 +717,7 @@ class ExcelStyleFilter {
         bDiv.querySelector('#deselectAll').addEventListener('click', () => { this.cbs.forEach(i => { i.cb.checked = false; this.sVals.delete(i.val); }); this.p.filterChangedCallback(); });
         this.onRowDataUpdated = () => this.refreshData(); this.p.api.addEventListener('rowDataUpdated', this.onRowDataUpdated);
     }
+
     refreshData() {
         let cVals = new Set();
         this.p.api.forEachLeafNode(n => {
@@ -730,16 +731,30 @@ class ExcelStyleFilter {
             if (a === "") return 1;
             if (b === "") return -1;
             if (campo === 'data') {
-                return comparadorDataBR(a, b);
+                // Ordena da data mais recente (topo) para a mais antiga
+                return comparadorDataBR(b, a);
             }
             return comparadorTextoNatural(a, b);
         });
         if (JSON.stringify(nArr) !== JSON.stringify(this.vArr)) {
-            nArr.forEach(v => { if (!this.vArr.includes(v)) this.sVals.add(v); });
+            const eraVazio = this.vArr.length === 0;
             this.vArr = nArr;
+
+            // Ao abrir o sistema pela 1ª vez, filtra automaticamente apenas a data do dia (mais recente)
+            if (campo === 'data' && eraVazio && nArr.length > 0 && !window.filtroDataPlanilhaInicializado) {
+                window.filtroDataPlanilhaInicializado = true;
+                this.sVals.clear();
+                this.sVals.add(nArr[0]);
+                this.renderCheckboxes();
+                setTimeout(() => this.p.filterChangedCallback(), 30);
+                return;
+            }
+
+            nArr.forEach(v => { if (!this.sVals.has(v) && eraVazio) this.sVals.add(v); });
             this.renderCheckboxes();
         }
     }
+
     renderCheckboxes() {
         this.lCont.innerHTML = ''; this.cbs = []; let ts = (this.lastSearchText || "").toLowerCase();
         this.vArr.forEach(v => {
@@ -974,10 +989,27 @@ function popularDropdownsHubBI(hubs) {
     const o = `<option value="TODOS">Todos os HUBs</option>` + hubs.map(h => `<option value="${h}">${h}</option>`).join('');
     populate('filtro-hub-est', o, "TODOS");
 }
+
+let filtroDataBIInicializado = false;
+
 function popularDropdownsDataBI(datas) {
     const dataMaisRecente = datas.length > 0 ? datas[0] : "TODAS";
     const o = `<option value="TODAS">Todas as Datas</option><option value="PERIODO">📅 Selecionar Período...</option>` + datas.map(d => `<option value="${d}">${d}</option>`).join('');
-    populate('filtro-data-est', o, dataMaisRecente);
+    const el = document.getElementById('filtro-data-est');
+    if (!el) return;
+
+    const valorAnterior = el.value;
+    el.innerHTML = o;
+
+    if (!filtroDataBIInicializado) {
+        // Na 1ª carga ao abrir o sistema, seleciona direto a página do dia para carregar rápido!
+        el.value = dataMaisRecente;
+        filtroDataBIInicializado = true;
+    } else if (valorAnterior && Array.from(el.options).some(opt => opt.value === valorAnterior)) {
+        el.value = valorAnterior;
+    } else {
+        el.value = dataMaisRecente;
+    }
 }
 
 function aplicarFiltroHubPlanilha() {
@@ -2208,6 +2240,63 @@ function gerarGeralOperacao(rawRows) {
     renderizarGeralOperacao();
 }
 
+// Guarda quais cards de ocorrência o colaborador desmarcou no Geral da Operação
+let goCardsOcultos = new Set();
+
+function toggleMenuFiltroCardsGO(event) {
+    if (event) event.stopPropagation();
+    const menu = document.getElementById('go-menu-filtro-cards');
+    if (menu) menu.classList.toggle('show');
+}
+
+function aoAlternarCardGO(motivo, marcado) {
+    if (marcado) {
+        goCardsOcultos.delete(motivo);
+    } else {
+        goCardsOcultos.add(motivo);
+    }
+    renderizarGeralOperacao();
+}
+
+function marcarTodosCardsGO(marcar) {
+    if (marcar) {
+        goCardsOcultos.clear();
+    } else {
+        (GO_DATA.motivosAgrupados || []).forEach(g => goCardsOcultos.add(g.motivo));
+    }
+    renderizarGeralOperacao();
+}
+
+function atualizarMenuCheckboxesCardsGO() {
+    const listaEl = document.getElementById('go-lista-checkboxes-cards');
+    const contadorEl = document.getElementById('go-contador-cards-visiveis');
+    if (!listaEl) return;
+
+    const motivos = (GO_DATA.motivosAgrupados || []).map(g => g.motivo);
+    if (motivos.length === 0) {
+        listaEl.innerHTML = `<div style="color:#94a3b8; font-size:11px; text-align:center; padding:8px;">Nenhum card disponível</div>`;
+        if (contadorEl) contadorEl.innerText = "0";
+        return;
+    }
+
+    let qtdVisiveis = 0;
+    listaEl.innerHTML = motivos.map(m => {
+        const visivel = !goCardsOcultos.has(m);
+        if (visivel) qtdVisiveis++;
+        const mEsc = m.replace(/'/g, "\\'");
+        return `
+            <label class="go-card-chk-label">
+                <input type="checkbox" ${visivel ? 'checked' : ''} onchange="aoAlternarCardGO('${mEsc}', this.checked)" style="width:14px; height:14px; accent-color:#1a237e; cursor:pointer; margin:0;">
+                <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${m}</span>
+            </label>
+        `;
+    }).join('');
+
+    if (contadorEl) {
+        contadorEl.innerText = (qtdVisiveis === motivos.length) ? "Todos" : `${qtdVisiveis}/${motivos.length}`;
+    }
+}
+
 function renderizarGeralOperacao() {
     const kpiContainer = document.getElementById('go-kpis');
     const chartContainer = document.getElementById('go-ontime-chart-panel');
@@ -2286,16 +2375,35 @@ function renderizarGeralOperacao() {
         </div>
     `;
 
+    atualizarMenuCheckboxesCardsGO();
+
     const corteSelect = document.getElementById('go-filtro-corte-pcts');
     const limitePacotes = corteSelect ? parseInt(corteSelect.value) : 100;
+
+    const statusRevSelect = document.getElementById('go-filtro-status-revertido');
+    const filtroStatusRev = statusRevSelect ? statusRevSelect.value : 'TODAS';
 
     if (!GO_DATA.motivosAgrupados || GO_DATA.motivosAgrupados.length === 0) {
         occGrid.innerHTML = `<div style="grid-column: 1 / -1; padding: 30px; text-align: center; color: #8a9abc; font-size: 13px;">Nenhuma ocorrência registada para o filtro atual.</div>`;
         return;
     }
 
-    occGrid.innerHTML = GO_DATA.motivosAgrupados.map(grupo => {
-        const rotasFiltradas = grupo.rotas.filter(r => r.est >= limitePacotes);
+    // Filtra apenas os cards que estão marcados no seletor "Selecionar Cards"
+    const gruposVisiveis = GO_DATA.motivosAgrupados.filter(g => !goCardsOcultos.has(g.motivo));
+
+    if (gruposVisiveis.length === 0) {
+        occGrid.innerHTML = `<div style="grid-column: 1 / -1; padding: 30px; text-align: center; color: #8a9abc; font-size: 13px;">Nenhum card selecionado no filtro "📌 Selecionar Cards".</div>`;
+        return;
+    }
+
+    occGrid.innerHTML = gruposVisiveis.map(grupo => {
+        // Filtra as rotas do card pelo corte de pacotes E pelo status (Todas / Revertidas / Não Revertidas)
+        const rotasFiltradas = grupo.rotas.filter(r => {
+            if (r.est < limitePacotes) return false;
+            if (filtroStatusRev === 'REVERTIDAS' && r.revertido !== 'SIM') return false;
+            if (filtroStatusRev === 'NAO_REVERTIDAS' && r.revertido === 'SIM') return false;
+            return true;
+        });
 
         const tabelaHTML = rotasFiltradas.length > 0 ? `
             <table class="go-pivot-table">
@@ -2326,7 +2434,7 @@ function renderizarGeralOperacao() {
                     }).join('')}
                 </tbody>
             </table>
-        ` : `<div style="padding: 14px; text-align: center; color: #94a3b8; font-size: 11.5px; font-style: italic;">Nenhuma rota com mais de ${limitePacotes} pacotes neste motivo.</div>`;
+        ` : `<div style="padding: 14px; text-align: center; color: #94a3b8; font-size: 11.5px; font-style: italic;">Nenhuma rota corresponde aos filtros selecionados neste card.</div>`;
 
         return `
             <div class="go-occ-card">
@@ -2391,6 +2499,7 @@ function exportarExcelFiltroCompleto() {
 // ==========================================
 document.addEventListener('click', function(e) {
     if (!e.target.closest('.color-dropdown')) document.querySelectorAll(".color-menu").forEach(m => m.classList.remove('show'));
+    if (!e.target.closest('.go-cards-filter-dropdown')) document.getElementById('go-menu-filtro-cards')?.classList.remove('show');
     const sb = document.getElementById("sidebar"), mI = document.querySelector(".menu-icon");
     if (sb && sb.classList.contains("aberta") && !sb.contains(e.target) && !mI.contains(e.target)) { sb.classList.remove("aberta"); document.getElementById("main-content").classList.remove("empurrado"); }
     const uM = document.getElementById('userMenu'); if (uM && uM.classList.contains('show') && !e.target.closest('.user-profile')) uM.classList.remove('show');
