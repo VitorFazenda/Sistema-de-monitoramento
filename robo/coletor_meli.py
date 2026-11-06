@@ -378,7 +378,7 @@ def garantir_login(page, forcar_recarregamento=False):
 
                         codigo_para_usar = codigo_recebido or gerar_codigo_totp_automatico()
                         if codigo_para_usar:
-                            log_painel(f"🚀 Injetando código Okta ({codigo_para_usar}) e avançando...")
+                            log_painel(f"🚀 Inserindo código Okta ({codigo_para_usar}) e avançando...")
                             input_alvo.fill("")
                             input_alvo.fill(codigo_para_usar)
                             clicar_botao_avancar_okta(page)
@@ -867,7 +867,7 @@ def executar_relatorio(page, lista_hubs, ticket):
                         else:
                             df.to_sql('rotas_brutas', con=motor_db, if_exists='replace', index=False, chunksize=1000)
                             
-                        log_painel(f"✅ Relatório sincronizado ({qtd_linhas} linhas processadas com baixo uso de RAM).")
+                        log_painel(f"✅ Relatório sincronizado ({qtd_linhas} linhas processadas).")
                     except Exception as e:
                         log_painel(f"⚠️ Aviso ao mesclar via SQL ({e}). Atualizando tabela...")
                         df.to_sql('rotas_brutas', con=motor_db, if_exists='replace', index=False, chunksize=1000)
@@ -1017,7 +1017,7 @@ def iniciar_orquestrador():
                                 elif acao == "relatorio":
                                     sucesso_geral = executar_relatorio(page, lista_hubs, ticket)
                                     if sucesso_geral:
-                                        log_painel(f"✅ RELATÓRIO BAIXADO para: {hub_string} ({tipo_ticket.upper()})")
+                                        log_painel(f"✅ EXTRAÇÃO DE RELATÓRIO CONCLUÍDA para: {hub_string} ({tipo_ticket.upper()})")
                                         
                                 if sucesso_geral:
                                     nova_coleta = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
