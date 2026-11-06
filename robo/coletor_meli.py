@@ -679,7 +679,9 @@ def executar_raspagem(page, hub_alvo):
                 page.wait_for_selector(seletor_cards, timeout=20000)
                 total_esperado = obter_total_rotas_painel_meli(page)
 
-                while True:
+                inicio_paginacao_hub = time.time()
+                while (time.time() - inicio_paginacao_hub) < 180:
+                    pulsar_watchdog()
                     primeiro_id_pagina = obter_primeiro_id_rota_visivel(page)
                     qtd_antes_pagina = len(mapa_rotas_capturadas)
 
@@ -726,7 +728,6 @@ def executar_raspagem(page, hub_alvo):
 
                     novas_nesta_pagina = len(mapa_rotas_capturadas) - qtd_antes_pagina
 
-                    # Se não veio nenhuma rota nova nesta página ou já atingiu o total, encerra imediatamente!
                     if novas_nesta_pagina == 0:
                         break
                     if (total_esperado > 0 and len(mapa_rotas_capturadas) >= total_esperado) or pagina_atual >= 15:
@@ -797,7 +798,6 @@ def executar_raspagem(page, hub_alvo):
                             foi_manual = str(df_antigo_hoje.at[idx, 'status_manual'] or '').upper().strip() == "SIM"
                             status_exclusivo_manual = st_antigo in ["DECLÍNIO", "DECLINIO"]
 
-                            # Preserva o status antigo apenas se foi alterado manualmente pelo time (ou Declínio)
                             if foi_manual or status_exclusivo_manual:
                                 df_novo.at[idx, 'status'] = st_antigo
 
