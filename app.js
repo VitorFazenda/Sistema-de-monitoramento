@@ -1017,7 +1017,26 @@ function aplicarFiltroHubPlanilha() {
     const hS = document.getElementById('filtro-hub-planilha').value;
     let dF = rotasGlobais;
     if (hS !== "TODOS") dF = rotasGlobais.filter(r => r.nome_rota && r.nome_rota.toUpperCase().startsWith(hS));
-    gridApi.setGridOption('rowData', ordenarRotasPorSequencia(dF));
+    const ordenadas = ordenarRotasPorSequencia(dF);
+    gridApi.setGridOption('rowData', ordenadas);
+
+    // Ao abrir o sistema pela 1ª vez, filtra a planilha automaticamente para a data do dia (mais recente)
+    if (!window.filtroDataPlanilhaInicializado && ordenadas.length > 0) {
+        window.filtroDataPlanilhaInicializado = true;
+        const dataHojePlanilha = ordenadas[0].data;
+        setTimeout(() => {
+            if (gridApi && dataHojePlanilha) {
+                gridApi.getColumnFilterInstance('data').then(inst => {
+                    if (inst) {
+                        inst.refreshData();
+                        inst.sVals = new Set([dataHojePlanilha]);
+                        inst.renderCheckboxes();
+                        gridApi.onFilterChanged();
+                    }
+                }).catch(() => {});
+            }
+        }, 80);
+    }
     setTimeout(atualizarContadorRotas, 100); 
 }
 
@@ -1069,9 +1088,86 @@ function filtrarBaseRelatorio(dId, hId, iniId, fimId, contId) {
 }
 
 let estatisticasCalculadas = false;
+let cacheRelatoriosPorData = {};
+let historicoCompletoCarregado = false;
 
-function aplicarFiltroUnificadoEstatisticas() {
-    const baseFiltrada = filtrarBaseRelatorio('filtro-data-est', 'filtro-hub-est', 'data-ini-est', 'data-fim-est', 'container-periodo-est');
+function filtrarListaBrutaPorHubEPeriodo(listaBase) {
+    const hS = document.getElementById('filtro-hub-est') ? document.getElementById('filtro-hub-est').value : "TODOS";
+    const dS = document.getElementById('filtro-data-est') ? document.getElementById('filtro-data-est').value : "TODAS";
+    const cP = document.getElementById('container-periodo-est');
+    if (dS === "PERIODO") { if(cP) cP.style.display = 'flex'; } else { if(cP) cP.style.display = 'none'; }
+
+    let dF = listaBase || [];
+    if (currentUser && currentUser.hubs !== "TODOS") {
+        const mh = currentUser.hubs.toUpperCase().split(',').map(h => h.trim());
+        dF = dF.filter(r => mh.some(h => String(r["Nome da Rota"] || "").toUpperCase().includes(h)));
+    }
+    if (hS !== "TODOS") {
+        dF = dF.filter(r => String(r['Nome da Rota'] || "").toUpperCase().startsWith(hS));
+    }
+    if (dS === "PERIODO") {
+        let dI = document.getElementById('data-ini-est') ? document.getElementById('data-ini-est').value : "";
+        let dFm = document.getElementById('data-fim-est') ? document.getElementById('data-fim-est').value : "";
+        if (dI || dFm) {
+            dF = dF.filter(r => {
+                let dr = String(r['Data da rota'] || r['Data'] || "");
+                if (!dr) return false;
+                let pts = dr.split(/[-/ ]/);
+                let dtR = pts.length >= 3 ? (pts[0].length === 4 ? new Date(pts[0], pts[1]-1, pts[2]) : new Date(pts[2], pts[1]-1, pts[0])) : null;
+                if (!dtR) return false;
+                if (dI) { let [y, m, d] = dI.split('-'); if (dtR < new Date(y, m-1, d)) return false; }
+                if (dFm) { let [y, m, d] = dFm.split('-'); if (dtR > new Date(y, m-1, d)) return false; }
+                return true;
+            });
+        }
+    } else if (dS !== "TODAS") {
+        dF = dF.filter(r => String(r['Data da rota'] || r['Data'] || "").trim() === dS);
+    }
+    return dF;
+}
+
+async function aplicarFiltroUnificadoEstatisticas() {
+    const dS = document.getElementById('filtro-data-est') ? document.getElementById('filtro-data-est').value : "TODAS";
+
+    // Se o colaborador escolheu outra data ou "Todas as Datas" que ainda não está no cache do navegador, busca na API na hora!
+    if ((dS === "TODAS" || dS === "PERIODO") && !historicoCompletoCarregado) {
+        controlarLoadingInfoAba('estatisticas', true);
+        try {
+            const r = await fetch(`${API_BASE_URL}/rotas_brutas`);
+            const todos = await r.json();
+            if (Array.isArray(todos)) {
+                rotasBrutas = todos;
+                historicoCompletoCarregado = true;
+                popularDropdownsHubBI(extrairHubs(rotasBrutas, 'Nome da Rota'));
+            }
+        } catch (e) {
+            console.error(e);
+        } finally {
+            controlarLoadingInfoAba('estatisticas', false);
+        }
+    } else if (dS !== "TODAS" && dS !== "PERIODO" && !historicoCompletoCarregado && !cacheRelatoriosPorData[dS]) {
+        controlarLoadingInfoAba('estatisticas', true);
+        try {
+            const r = await fetch(`${API_BASE_URL}/rotas_brutas?data=${encodeURIComponent(dS)}`);
+            const doDia = await r.json();
+            if (Array.isArray(doDia)) {
+                cacheRelatoriosPorData[dS] = doDia;
+                rotasBrutas = doDia;
+                popularDropdownsHubBI(extrairHubs(
+                    rotasGlobais.length > 0 ? rotasGlobais : rotasBrutas,
+                    rotasGlobais.length > 0 ? 'nome_rota' : 'Nome da Rota'
+                ));
+            }
+        } catch (e) {
+            console.error(e);
+        } finally {
+            controlarLoadingInfoAba('estatisticas', false);
+        }
+    } else if (dS !== "TODAS" && dS !== "PERIODO" && !historicoCompletoCarregado && cacheRelatoriosPorData[dS]) {
+        rotasBrutas = cacheRelatoriosPorData[dS];
+    }
+
+    const baseFiltrada = filtrarListaBrutaPorHubEPeriodo(rotasBrutas);
     gerarBI(baseFiltrada);
     limparFiltroMotivoOC();
     gerarOC(baseFiltrada);
@@ -1109,7 +1205,9 @@ function carregarRotas(exibirToastRobo = false) {
                 rotasGlobais = ordenarRotasPorSequencia(rotasGlobais);
                 rotasJaCarregadas = true;
                 if (document.getElementById('home-stat-rotas')) document.getElementById('home-stat-rotas').innerText = rotasGlobais.length;
-                popularDropdownsHubMonitoramento(extrairHubs(rotasGlobais, 'nome_rota'));
+                const hubsExtraidos = extrairHubs(rotasGlobais, 'nome_rota');
+                popularDropdownsHubMonitoramento(hubsExtraidos);
+                popularDropdownsHubBI(hubsExtraidos);
                 aplicarFiltroHubPlanilha();
                 inicializarEscala();
                 if (exibirToastRobo) mostrarToastRobo("Informações da planilha atualizadas pelo robô!");
@@ -1125,26 +1223,41 @@ function carregarRotas(exibirToastRobo = false) {
 
 function carregarRelatorios(exibirToastRobo = false) {
     carregandoRelatoriosAgora = true;
-    promessaRelatorios = fetch(`${API_BASE_URL}/rotas_brutas`)
+    if (!relatoriosJaCarregados) controlarLoadingInfoAba('estatisticas', true);
+
+    // Já exibe a data de hoje no dropdown antes mesmo da resposta chegar!
+    const elDataEst = document.getElementById('filtro-data-est');
+    if (elDataEst && !filtroDataBIInicializado) {
+        const hj = new Date();
+        const strHoje = `${String(hj.getDate()).padStart(2, '0')}-${String(hj.getMonth() + 1).padStart(2, '0')}-${hj.getFullYear()}`;
+        elDataEst.innerHTML = `<option value="${strHoje}" selected>${strHoje}</option><option value="TODAS">Todas as Datas</option>`;
+    }
+
+    // Puxa apenas a página do dia atual (inicial=1) para abrir instantaneamente!
+    promessaRelatorios = fetch(`${API_BASE_URL}/rotas_brutas?inicial=1`)
         .then(r => r.json())
         .then(d => {
-            if (Array.isArray(d) && d.length > 0) {
-                if (currentUser.hubs !== "TODOS") {
-                    const mh = currentUser.hubs.toUpperCase().split(',').map(h => h.trim());
-                    rotasBrutas = d.filter(r => mh.some(h => String(r["Nome da Rota"] || "").toUpperCase().includes(h)));
-                } else {
-                    rotasBrutas = d;
+            if (d && Array.isArray(d.registros)) {
+                historicoCompletoCarregado = false;
+                cacheRelatoriosPorData = {};
+                if (d.ultima_data) {
+                    cacheRelatoriosPorData[d.ultima_data] = d.registros;
                 }
-                popularDropdownsHubBI(extrairHubs(rotasBrutas, 'Nome da Rota'));
-                popularDropdownsDataBI(extrairDatasBI(rotasBrutas));
+                rotasBrutas = d.registros;
+                popularDropdownsDataBI(d.datas || []);
+                const hubsDisp = extrairHubs(rotasGlobais.length > 0 ? rotasGlobais : rotasBrutas, rotasGlobais.length > 0 ? 'nome_rota' : 'Nome da Rota');
+                if (hubsDisp.length > 0) popularDropdownsHubBI(hubsDisp);
+
                 estatisticasCalculadas = false;
-                
                 const abaEstAtiva = document.getElementById('aba-estatisticas')?.classList.contains('ativo');
                 if (abaEstAtiva) {
                     aplicarFiltroUnificadoEstatisticas();
                 }
                 relatoriosJaCarregados = true;
-            } else {
+            } else if (Array.isArray(d)) {
+                rotasBrutas = d;
+                historicoCompletoCarregado = true;
+                popularDropdownsDataBI(extrairDatasBI(rotasBrutas));
                 relatoriosJaCarregados = true;
             }
             if (exibirToastRobo) mostrarToastRobo("Estatísticas e relatórios atualizados pelo robô!");
@@ -1152,6 +1265,7 @@ function carregarRelatorios(exibirToastRobo = false) {
         .catch(e => console.error(e))
         .finally(() => {
             carregandoRelatoriosAgora = false;
+            controlarLoadingInfoAba('estatisticas', false);
         });
     return promessaRelatorios;
 }

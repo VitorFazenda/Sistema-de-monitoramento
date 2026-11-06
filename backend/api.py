@@ -366,18 +366,86 @@ def construir_json_rotas_brutas() -> str:
     CACHE_DADOS["rotas_brutas_ts"] = time.time()
     return json_str
 
-@app.get("/rotas_brutas")
-def puxar_rotas_brutas():
-    agora = time.time()
-    # Cache válido por até 30 minutos (ou até o robô baixar um relatório novo)
-    if CACHE_DADOS["rotas_brutas_json"] is not None and (agora - CACHE_DADOS["rotas_brutas_ts"]) < 1800:
-        return Response(content=CACHE_DADOS["rotas_brutas_json"], media_type="application/json")
+def carregar_df_rotas_brutas_limpo():
+    insp = inspect(motor_db)
+    if not insp.has_table('rotas_brutas'):
+        return pd.DataFrame()
+    
+    df = pd.read_sql_table('rotas_brutas', con=motor_db).fillna("")
+    if df.empty:
+        return pd.DataFrame()
 
-    try:
-        json_str = construir_json_rotas_brutas()
-        return Response(content=json_str, media_type="application/json")
-    except Exception: 
-        return Response(content="[]", media_type="application/json")
+    colunas_uteis = [
+        'ID do Rota', 'Nome da Rota', 'Data da rota', 'Data', 'ID do Motorista',
+        'Tipo de parada', 'Parada', 'ID de Parada', 'Horários', 'ONTIME',
+        'Pontualidade', 'Hora de coleta concluída', 'Pacotes coletados',
+        'Pacotes estimados', 'Pacotes preparados', 'Tipo do Rota',
+        'Motivo', 'Detalhes', 'Pacotes não preparados/Não estão na agência',
+        'Pacotes não cabem no veículo', 'Pacotes em mau estado'
+    ]
+    cols_existentes = [c for c in colunas_uteis if c in df.columns]
+    if len(cols_existentes) >= 5:
+        df = df[cols_existentes]
+    return df
+
+def ordenar_datas_br_lista(lista_datas):
+    def chave_data(s):
+        p = re.split(r'[/ -]', str(s).strip())
+        if len(p) >= 3:
+            if len(p[0]) == 4:
+                return f"{p[0]}{p[1].zfill(2)}{p[2].zfill(2)}"
+            return f"{p[2]}{p[1].zfill(2)}{p[0].zfill(2)}"
+        return "00000000"
+    return sorted(lista_datas, key=chave_data, reverse=True)
+
+def construir_json_rotas_brutas() -> str:
+    df = carregar_df_rotas_brutas_limpo()
+    if df.empty:
+        CACHE_DADOS["rotas_brutas_json"] = "[]"
+        CACHE_DADOS["rotas_brutas_ts"] = time.time()
+        return "[]"
+
+    col_data = 'Data da rota' if 'Data da rota' in df.columns else ('Data' if 'Data' in df.columns else None)
+    if col_data:
+        datas_unicas = [str(x).strip() for x in df[col_data].unique().tolist() if str(x).strip()]
+        datas_ordenadas = ordenar_datas_br_lista(datas_unicas)
+        CACHE_DADOS["datas_brutas"] = datas_ordenadas
+        CACHE_DADOS["por_data_json"] = {}
+        for d_val in datas_ordenadas:
+            df_dia = df[df[col_data].astype(str).str.strip() == d_val]
+            CACHE_DADOS["por_data_json"][d_val] = df_dia.to_json(orient="records", force_ascii=False)
+
+    json_str = df.to_json(orient="records", force_ascii=False)
+    CACHE_DADOS["rotas_brutas_json"] = json_str
+    CACHE_DADOS["rotas_brutas_ts"] = time.time()
+    return json_str
+
+@app.get("/rotas_brutas")
+def puxar_rotas_brutas(inicial: int = 0, data: str = ""):
+    agora = time.time()
+    if CACHE_DADOS["rotas_brutas_json"] is None or (agora - CACHE_DADOS["rotas_brutas_ts"]) >= 1800:
+        try:
+            construir_json_rotas_brutas()
+        except Exception:
+            return Response(content="[]", media_type="application/json")
+
+    datas_disp = CACHE_DADOS.get("datas_brutas", [])
+    por_data = CACHE_DADOS.get("por_data_json", {})
+
+    # 1. Abertura rápida do sistema: envia apenas os registros do dia mais recente + lista de datas e HUBs
+    if inicial == 1:
+        ultima_dt = datas_disp[0] if datas_disp else ""
+        reg_json = por_data.get(ultima_dt, "[]")
+        payload = f'{{"datas": {json.dumps(datas_disp)}, "ultima_data": {json.dumps(ultima_dt)}, "registros": {reg_json}}}'
+        return Response(content=payload, media_type="application/json")
+
+    # 2. Quando o colaborador seleciona uma data específica no filtro
+    data_limpa = str(data or "").strip()
+    if data_limpa and data_limpa not in ["TODAS", "PERIODO"] and data_limpa in por_data:
+        return Response(content=por_data[data_limpa], media_type="application/json")
+
+    # 3. Quando seleciona "Todas as Datas" ou "Período"
+    return Response(content=CACHE_DADOS["rotas_brutas_json"] or "[]", media_type="application/json")
 
 @app.post("/salvar_escala")
 async def salvar_escala(request: Request):

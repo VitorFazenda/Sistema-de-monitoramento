@@ -523,42 +523,61 @@ def obter_total_rotas_painel_meli(page) -> int:
     except Exception:
         return 0
 
-def ir_para_proxima_pagina_meli(page, proxima_pag: int) -> bool:
-    """Tenta avançar para a próxima página usando os botões Seguinte/Próximo ou número da página"""
+def obter_primeiro_id_rota_visivel(page) -> str:
+    """Retorna o ID da primeira rota visível no topo da lista para confirmar mudança de página"""
+    try:
+        return page.evaluate("""() => {
+            const el = document.querySelector('div.list .button-copy__text, div.monitoring-row .button-copy__text');
+            return el ? (el.textContent || '').replace(/[^0-9]/g, '') : '';
+        }""") or ""
+    except Exception:
+        return ""
+
+def ir_para_proxima_pagina_meli(page, proxima_pag: int, primeiro_id_antes: str) -> bool:
+    """Clica no botão da próxima página com clique real do Playwright e aguarda os cards trocarem"""
     try:
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        time.sleep(0.8)
+        time.sleep(1.0)
 
-        clicou = page.evaluate("""(numPag) => {
-            const nav = document.querySelector('nav[aria-label*="Pagina" i], ul.andes-pagination, .andes-pagination');
-            if (!nav) return false;
+        clicou = False
+        # 1. Tenta clicar diretamente no número exato da próxima página (ex: '2', '3', '4')
+        seletores_num = [
+            f'nav[aria-label*="Pagina" i] a:text-is("{proxima_pag}")',
+            f'nav[aria-label*="Pagina" i] button:text-is("{proxima_pag}")',
+            f'.andes-pagination__button a:text-is("{proxima_pag}")',
+            f'li.andes-pagination__button:has-text("{proxima_pag}") a'
+        ]
+        for sel in seletores_num:
+            loc = page.locator(sel).first
+            if loc.count() > 0 and loc.is_visible():
+                loc.scroll_into_view_if_needed()
+                loc.click(timeout=8000)
+                clicou = True
+                break
 
-            // 1. Tenta pelo botão 'Seguinte' / 'Próximo' / '--next'
-            const liNext = nav.querySelector('.andes-pagination__button--next');
-            if (liNext && !liNext.classList.contains('andes-pagination__button--disabled')) {
-                const alvo = liNext.querySelector('a, button') || liNext;
-                if (alvo && alvo.getAttribute('aria-disabled') !== 'true' && !alvo.disabled) {
-                    alvo.scrollIntoView({ block: 'center' });
-                    alvo.click();
-                    return true;
-                }
-            }
+        # 2. Se não achou pelo número, clica no botão 'Seguinte' / 'Próximo'
+        if not clicou:
+            btn_next = page.locator('.andes-pagination__button--next:not(.andes-pagination__button--disabled) a, .andes-pagination__button--next:not(.andes-pagination__button--disabled) button, a[title="Seguinte"], a[title="Próximo"]').first
+            if btn_next.count() > 0 and btn_next.is_visible():
+                btn_next.scroll_into_view_if_needed()
+                btn_next.click(timeout=8000)
+                clicou = True
 
-            // 2. Fallback: procura o botão numérico exato da próxima página (ex: '2', '3', '4')
-            const botoes = Array.from(nav.querySelectorAll('a, button, li.andes-pagination__button'));
-            for (const b of botoes) {
-                const txt = (b.innerText || b.textContent || '').trim();
-                if (txt === String(numPag)) {
-                    const clicavel = b.querySelector('a, button') || b;
-                    clicavel.scrollIntoView({ block: 'center' });
-                    clicavel.click();
-                    return true;
-                }
-            }
-            return false;
-        }""", proxima_pag)
+        if not clicou:
+            return False
 
-        return bool(clicou)
+        # 3. AGUARDA OS CARDS MUDAREM DE VERDADE NA TELA (evita pular as páginas 2 e 3!)
+        fim_espera = time.time() + 15
+        while time.time() < fim_espera:
+            time.sleep(0.8)
+            novo_id = obter_primeiro_id_rota_visivel(page)
+            spinners = page.locator('.andes-spinner:visible, .andes-skeleton:visible, [aria-busy="true"]:visible').count()
+            if spinners == 0 and novo_id and novo_id != primeiro_id_antes:
+                time.sleep(1.0)
+                return True
+
+        time.sleep(2.0)
+        return True
     except Exception:
         return False
 
@@ -657,11 +676,13 @@ def executar_raspagem(page, hub_alvo):
                 total_esperado = obter_total_rotas_painel_meli(page)
 
                 while True:
-                    # Faz rolagem progressiva na página atual para forçar o Meli a renderizar 100% dos cards da página
-                    page.evaluate("window.scrollTo(0, 0)")
-                    time.sleep(0.6)
+                    primeiro_id_pagina = obter_primeiro_id_rota_visivel(page)
+                    qtd_antes_pagina = len(mapa_rotas_capturadas)
 
-                    for passo_scroll in range(12):
+                    page.evaluate("window.scrollTo(0, 0)")
+                    time.sleep(0.8)
+
+                    for passo_scroll in range(15):
                         lote_visivel = extrair_cards_visiveis_js(page, hub_alvo)
                         for item in lote_visivel:
                             id_r = item["id_rota"]
@@ -686,51 +707,27 @@ def executar_raspagem(page, hub_alvo):
                                 "data": data_hoje_str
                             }
 
-                        # Rola a janela e também a div.list (caso tenha barra de rolagem própria)
                         chegou_ao_fim = page.evaluate("""() => {
                             const lista = document.querySelector('div.list');
                             if (lista && lista.scrollHeight > lista.clientHeight + 20) {
-                                lista.scrollBy(0, 650);
+                                lista.scrollBy(0, 600);
                             }
                             const antes = window.scrollY;
-                            window.scrollBy(0, 650);
+                            window.scrollBy(0, 600);
                             return (window.innerHeight + window.scrollY) >= (document.body.scrollHeight - 15) && (window.scrollY === antes);
                         }""")
-                        time.sleep(0.35)
-                        if chegou_ao_fim and passo_scroll >= 3:
+                        time.sleep(0.4)
+                        if chegou_ao_fim and passo_scroll >= 4:
                             break
 
-                    # Captura final no rodapé da página atual
-                    for item in extrair_cards_visiveis_js(page, hub_alvo):
-                        id_r = item["id_rota"]
-                        int_est = int(item["estimados"]) if str(item["estimados"]).isdigit() else 0
-                        int_col = int(item["coletados"]) if str(item["coletados"]).isdigit() else 0
-                        restante = str(int_est - int_col)
-                        status_traduzido = traduzir_status_meli(item["status_bruto"], int_col)
-                        match_cluster = re.search(r'_(C\d+)_', item["nome_rota"])
-                        cluster = match_cluster.group(1) if match_cluster else "Sem Cluster"
-                        mapa_rotas_capturadas[id_r] = {
-                            "id_rota": id_r,
-                            "nome_rota": item["nome_rota"],
-                            "cluster": cluster,
-                            "horario": item["horario"],
-                            "motorista": item["motorista"],
-                            "placa": item["placa"],
-                            "status": status_traduzido,
-                            "estimado_total": str(int_est),
-                            "coletado_geral": str(int_col),
-                            "restante": restante,
-                            "data": data_hoje_str
-                        }
+                    novas_nesta_pagina = len(mapa_rotas_capturadas) - qtd_antes_pagina
+                    log_painel(f"📄 Página {pagina_atual}: +{novas_nesta_pagina} rotas lidas (Acumulado: {len(mapa_rotas_capturadas)}/{total_esperado or '?'})")
 
-                    # Se já atingiu o total esperado pelo Meli ou passou de 30 páginas, encerra a paginação
                     if (total_esperado > 0 and len(mapa_rotas_capturadas) >= total_esperado) or pagina_atual >= 30:
                         break
 
-                    # Tenta avançar para a próxima página (Página 2, 3, 4...)
-                    if ir_para_proxima_pagina_meli(page, pagina_atual + 1):
+                    if ir_para_proxima_pagina_meli(page, pagina_atual + 1, primeiro_id_pagina):
                         pagina_atual += 1
-                        aguardar_carregamento_meli(page, tempo_max=10)
                         continue
                     break
             finally:
