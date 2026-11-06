@@ -5,6 +5,7 @@ import json
 import datetime
 import threading
 import shutil
+import subprocess
 import requests
 import gc
 import pandas as pd
@@ -72,10 +73,48 @@ if not DB_URL:
     print("❌ Erro Crítico: DATABASE_URL não encontrada. Verifique o seu ficheiro .env!")
     exit()
 
-motor_db = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=300)
+motor_db = create_engine(
+    DB_URL,
+    pool_pre_ping=True,
+    pool_recycle=300,
+    connect_args={"options": "-c lock_timeout=15000 -c statement_timeout=60000"}
+)
 DIAS_SEMANA = ["Segunda", "Terca", "Quarta", "Quinta", "Sexta", "Sabado", "Domingo"]
 
+# ==========================================
+# WATCHDOG E LIMPEZA DE PROCESSOS (ANTI-TRAVAMENTO ÀS 16H)
+# ==========================================
+ULTIMA_ATIVIDADE_MOTOR = time.time()
+EM_ESPERA_LOGIN_OKTA = False
+
+def pulsar_watchdog():
+    global ULTIMA_ATIVIDADE_MOTOR
+    ULTIMA_ATIVIDADE_MOTOR = time.time()
+
+def limpar_travas_sessao():
+    """Remove arquivos SingletonLock caso o Chromium tenha fechado abruptamente no servidor"""
+    if not os.path.exists(PASTA_SESSAO):
+        return
+    for nome_lock in ["SingletonLock", "SingletonCookie", "SingletonSocket"]:
+        caminho_lock = os.path.join(PASTA_SESSAO, nome_lock)
+        try:
+            if os.path.lexists(caminho_lock):
+                os.remove(caminho_lock)
+        except Exception:
+            pass
+
+def matar_chromium_zumbi():
+    """Força o encerramento de processos órfãos do Chromium no Linux"""
+    if os.name != "nt":
+        try:
+            subprocess.run(["pkill", "-9", "-f", "chromium"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+            subprocess.run(["pkill", "-9", "-f", "chrome"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        except Exception:
+            pass
+    limpar_travas_sessao()
+
 def log_painel(mensagem):
+    pulsar_watchdog()
     print(mensagem, flush=True)
     try:
         requests.post(f"{API_URL}/enviar_log", json={"mensagem": mensagem}, timeout=3)
@@ -83,6 +122,9 @@ def log_painel(mensagem):
         pass
 
 def informar_status_login(status_str):
+    global EM_ESPERA_LOGIN_OKTA
+    pulsar_watchdog()
+    EM_ESPERA_LOGIN_OKTA = (status_str == "AGUARDANDO_OKTA")
     try:
         requests.post(
             f"{API_URL}/status_login_robo",
@@ -94,6 +136,7 @@ def informar_status_login(status_str):
 
 def ler_comando_okta_api():
     """Consulta na API se o utilizador enviou código Okta, trocou a conta ou pediu para recarregar"""
+    pulsar_watchdog()
     try:
         r = requests.get(f"{API_URL}/obter_comando_okta", timeout=3)
         if r.status_code == 200:
@@ -113,18 +156,6 @@ def gerar_codigo_totp_automatico():
     except Exception as e:
         log_painel(f"⚠️ Erro ao gerar código TOTP automático: {e}")
         return None
-
-def limpar_travas_sessao():
-    """Remove arquivos SingletonLock caso o Chromium tenha fechado abruptamente no servidor"""
-    if not os.path.exists(PASTA_SESSAO):
-        return
-    for nome_lock in ["SingletonLock", "SingletonCookie", "SingletonSocket"]:
-        caminho_lock = os.path.join(PASTA_SESSAO, nome_lock)
-        try:
-            if os.path.lexists(caminho_lock):
-                os.remove(caminho_lock)
-        except Exception:
-            pass
 
 def avaliar_se_deve_rodar(ticket):
     agora = datetime.datetime.now()
@@ -171,7 +202,21 @@ def avaliar_se_deve_rodar(ticket):
     return False
 
 def daemon_heartbeat():
+    """Envia pulso para a API e reinicia o robô sozinho caso o motor principal congele"""
     while True:
+        tempo_sem_resposta = time.time() - ULTIMA_ATIVIDADE_MOTOR
+        limite_travamento = 600 if EM_ESPERA_LOGIN_OKTA else 240
+
+        if tempo_sem_resposta > limite_travamento:
+            try:
+                msg_reset = f"🔄 [AUTO-RESET] Robô sem resposta há {int(tempo_sem_resposta)}s. Limpando navegador e reiniciando automaticamente..."
+                print(msg_reset, flush=True)
+                requests.post(f"{API_URL}/enviar_log", json={"mensagem": msg_reset}, timeout=3)
+            except Exception:
+                pass
+            matar_chromium_zumbi()
+            os._exit(1)
+
         try:
             requests.get(f"{API_URL}/heartbeat", timeout=10)
         except Exception:
@@ -255,6 +300,7 @@ def garantir_login(page, forcar_recarregamento=False):
     inicio_espera_okta = time.time()
 
     while pagina_esta_no_okta(page):
+        pulsar_watchdog()
         cmd = ler_comando_okta_api()
 
         # 1. Verifica se o utilizador trocou a conta no seletor (Ex: Vitor.Martins <-> Larissa.Campos)
@@ -410,13 +456,14 @@ def traduzir_status_meli(status_bruto: str, coletados_int: int) -> str:
     return st if st else "PENDENTE DE LOGIN"
 
 # ==========================================
-# MÓDULO 1: RASPAGEM DE MONITORAMENTO (SCROLL PROGRESSIVO + PAGINAÇÃO COMPLETA)
+# MÓDULO 1: RASPAGEM DE MONITORAMENTO 
 # ==========================================
 def aguardar_carregamento_meli(page, tempo_max=12):
     """Aguarda os spinners do Mercado Livre sumirem após limpar ou aplicar filtros"""
     time.sleep(1.5)
     fim = time.time() + tempo_max
     while time.time() < fim:
+        pulsar_watchdog()
         try:
             spinners = page.locator('.andes-spinner:visible, [aria-busy="true"]:visible').count()
             if spinners == 0:
@@ -509,7 +556,7 @@ def extrair_cards_visiveis_js(page, hub_alvo):
         return []
 
 def obter_total_rotas_painel_meli(page) -> int:
-    """Lê o contador oficial de Rotas no topo da página do Mercado Livre (ex: 191)"""
+    """Lê o contador oficial de Rotas no topo da página do Mercado Livre"""
     try:
         total = page.evaluate("""() => {
             const stats = document.querySelector('.stats');
@@ -543,7 +590,6 @@ def ir_para_proxima_pagina_meli(page, proxima_pag: int, primeiro_id_antes: str) 
             const nav = document.querySelector('nav[aria-label*="Pagina" i], ul.andes-pagination, .andes-pagination');
             if (!nav) return false;
 
-            // 1. Tenta pelo botão 'Seguinte' / 'Próximo' (somente se não estiver desativado)
             const liNext = nav.querySelector('.andes-pagination__button--next');
             if (liNext && !liNext.classList.contains('andes-pagination__button--disabled')) {
                 const alvo = liNext.querySelector('a, button') || liNext;
@@ -554,7 +600,6 @@ def ir_para_proxima_pagina_meli(page, proxima_pag: int, primeiro_id_antes: str) 
                 }
             }
 
-            // 2. Fallback: botão numérico da próxima página (ex: '2', '3', '4')
             const botoes = Array.from(nav.querySelectorAll('li.andes-pagination__button:not(.andes-pagination__button--disabled) a, li.andes-pagination__button:not(.andes-pagination__button--disabled) button'));
             for (const b of botoes) {
                 const txt = (b.innerText || b.textContent || '').trim();
@@ -570,9 +615,9 @@ def ir_para_proxima_pagina_meli(page, proxima_pag: int, primeiro_id_antes: str) 
         if not clicou:
             return False
 
-        # Aguarda até 10 segundos os cards da página nova aparecerem
         fim_espera = time.time() + 10
         while time.time() < fim_espera:
+            pulsar_watchdog()
             time.sleep(0.6)
             novo_id = obter_primeiro_id_rota_visivel(page)
             spinners = page.locator('.andes-spinner:visible, .andes-skeleton:visible, [aria-busy="true"]:visible').count()
@@ -580,7 +625,6 @@ def ir_para_proxima_pagina_meli(page, proxima_pag: int, primeiro_id_antes: str) 
                 time.sleep(0.8)
                 return True
 
-        # Se o 1º ID não mudou, chegou na última página -> retorna False para encerrar na hora!
         return False
     except Exception:
         return False
@@ -610,7 +654,6 @@ def executar_raspagem(page, hub_alvo):
                 )
                 aguardar_carregamento_meli(page, tempo_max=12)
 
-            # 1. Sempre limpa todos os filtros antes de começar
             clicar_limpar_todos_filtros(page)
 
             if hub_alvo != "TODOS":
@@ -660,7 +703,6 @@ def executar_raspagem(page, hub_alvo):
             else:
                 log_painel("🌎 Filtros limpos! Raspando TODAS as rotas disponíveis no sistema.")
 
-            # Exibe o aviso inicial e repete apenas a cada 60 segundos enquanto estiver raspando
             parar_aviso_raspagem = threading.Event()
             def loop_aviso_raspando():
                 log_painel("🤖 Robô raspando rotas...")
@@ -689,6 +731,7 @@ def executar_raspagem(page, hub_alvo):
                     time.sleep(0.6)
 
                     for passo_scroll in range(15):
+                        pulsar_watchdog()
                         lote_visivel = extrair_cards_visiveis_js(page, hub_alvo)
                         for item in lote_visivel:
                             id_r = item["id_rota"]
@@ -923,14 +966,13 @@ def executar_relatorio(page, lista_hubs, ticket):
             log_painel("⏳ Aguardando processamento do relatório no Mercado Livre...")
             botao_baixar = page.locator('button[data-andes-button="true"]:has(span:has-text("Baixar"))').first
             
-            # Aguarda até 30 segundos o botão "Baixar" ficar habilitado (evita falso "Não há resultados" em relatórios grandes)
             habilitou_baixar = False
             for _ in range(15):
+                pulsar_watchdog()
                 time.sleep(2)
                 if botao_baixar.count() > 0 and botao_baixar.is_visible() and not botao_baixar.is_disabled():
                     habilitou_baixar = True
                     break
-                # Se aparecer mensagem explícita de que não há dados na tela, encerra antes
                 if page.locator("text=Não foram encontrados resultados, text=Sem resultados").count() > 0:
                     break
             
@@ -956,7 +998,6 @@ def executar_relatorio(page, lista_hubs, ticket):
                 insp = inspect(motor_db)
                 df.columns = df.columns.str.strip()
 
-                # Mantém apenas as colunas necessárias para os painéis (reduz consumo de RAM em 70% às 16h!)
                 colunas_uteis_rel = [
                     'ID do Rota', 'Nome da Rota', 'Data da rota', 'Data', 'ID do Motorista',
                     'Tipo de parada', 'Parada', 'ID de Parada', 'Horários', 'ONTIME',
@@ -982,7 +1023,6 @@ def executar_relatorio(page, lista_hubs, ticket):
 
                         if 'ID do Rota' in df.columns and 'ID do Rota' in colunas_existentes:
                             ids_novos = [str(x).strip() for x in df['ID do Rota'].dropna().unique().tolist() if str(x).strip()]
-                            # Remove apenas as rotas atualizadas direto no PostgreSQL sem carregar a tabela inteira na RAM!
                             with motor_db.begin() as conn:
                                 for i in range(0, len(ids_novos), 500):
                                     lote = ids_novos[i:i+500]
@@ -1054,6 +1094,7 @@ def iniciar_orquestrador():
 
     while True:
         try:
+            pulsar_watchdog()
             limpar_travas_sessao()
             with sync_playwright() as p:
                 modo_str = "HEADLESS (Servidor)" if HEADLESS_MODE else "INTERFACE VISÍVEL (Local)"
@@ -1081,6 +1122,7 @@ def iniciar_orquestrador():
                 
                 while True:
                     try:
+                        pulsar_watchdog()
                         cmd_standby = ler_comando_okta_api()
                         if cmd_standby.get("reiniciar_login"):
                             log_painel("🔄 Comando de recarregamento recebido! Reiniciando verificação de login...")
@@ -1165,12 +1207,10 @@ def iniciar_orquestrador():
                                 log_painel(f"❌ Erro crítico ao processar ticket: {e}")
                                 
                         if not ticket_processado:
-                            # Recicla o Chromium a cada 6 tarefas concluídas para manter a memória RAM sempre livre!
+                            pulsar_watchdog()
                             if tarefas_desde_ultimo_reset >= 6:
-                                try:
-                                    navegador.close()
-                                except Exception:
-                                    pass
+                                log_painel("🧹 Reciclando memória do navegador preventivamente...")
+                                matar_chromium_zumbi()
                                 gc.collect()
                                 break
 
@@ -1181,10 +1221,13 @@ def iniciar_orquestrador():
                             time.sleep(4)
                             
                     except Exception as e_inner:
+                        pulsar_watchdog()
                         log_painel(f"⚠️ Oscilação no loop interno: {e_inner}")
                         time.sleep(5)
                         
         except Exception as e_outer:
+            pulsar_watchdog()
+            matar_chromium_zumbi()
             log_painel(f"🔄 Reiniciando motor do navegador ({e_outer})...")
             time.sleep(5)
 
