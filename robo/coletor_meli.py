@@ -738,6 +738,8 @@ def executar_raspagem(page, hub_alvo):
                     break
             finally:
                 parar_aviso_raspagem.set()
+
+            dados_raspados = list(mapa_rotas_capturadas.values())
                     
             if dados_raspados:
                 log_painel(f"📦 {hub_alvo}: {len(dados_raspados)} rota(s) capturada(s)! Atualizando planilha...")
