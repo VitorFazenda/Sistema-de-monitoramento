@@ -456,16 +456,16 @@ def traduzir_status_meli(status_bruto: str, coletados_int: int) -> str:
     return st if st else "PENDENTE DE LOGIN"
 
 # ==========================================
-# MÓDULO 1: RASPAGEM DE MONITORAMENTO 
+# MÓDULO 1: RASPAGEM DE MONITORAMENTO (CAPACIDADE +1.000 ROTAS)
 # ==========================================
-def aguardar_carregamento_meli(page, tempo_max=12):
-    """Aguarda os spinners do Mercado Livre sumirem após limpar ou aplicar filtros"""
+def aguardar_carregamento_meli(page, tempo_max=15):
+    """Aguarda os spinners e skeletons do Mercado Livre sumirem após limpar ou aplicar filtros"""
     time.sleep(1.5)
     fim = time.time() + tempo_max
     while time.time() < fim:
         pulsar_watchdog()
         try:
-            spinners = page.locator('.andes-spinner:visible, [aria-busy="true"]:visible').count()
+            spinners = page.locator('.andes-spinner:visible, .andes-skeleton:visible, [aria-busy="true"]:visible').count()
             if spinners == 0:
                 break
         except Exception:
@@ -474,23 +474,68 @@ def aguardar_carregamento_meli(page, tempo_max=12):
     time.sleep(1.5)
 
 def clicar_limpar_todos_filtros(page):
-    """Clica no botão 'Limpar todos' do Mercado Livre uma única vez e aguarda estabilizar"""
-    seletores_limpar = [
-        'button.button-link__button:has(span:has-text("Limpar todos"))',
-        'span.andes-typography:has-text("Limpar todos")',
-        'text=Limpar todos'
-    ]
-    for sel in seletores_limpar:
-        try:
-            btn = page.locator(sel).first
-            if btn.count() > 0 and btn.is_visible():
-                log_painel("🧹 Limpando todos os filtros da tela do Mercado Livre...")
-                btn.click(timeout=8000)
-                aguardar_carregamento_meli(page, tempo_max=10)
-                return True
-        except Exception:
-            continue
+    """Clica em 'Limpar todos' via JS + force=True sem travar em overlays e garante remoção de tags"""
+     pulsar_watchdog()
+    try:
+        # 1. Tenta clicar diretamente via JavaScript no botão 'Limpar todos'
+        clicou_js = page.evaluate("""() => {
+            const elementos = Array.from(document.querySelectorAll('button.button-link__button, button, a, span.andes-typography'));
+            for (const el of elementos) {
+                const txt = (el.innerText || el.textContent || '').trim();
+                if (txt === 'Limpar todos' && el.offsetParent !== null) {
+                    const btn = el.closest('button, a') || el;
+                    btn.click();
+                    return true;
+                }
+            }
+            return false;
+        }""")
+        if clicou_js:
+            log_painel("🧹 Limpando todos os filtros da tela do Mercado Livre...")
+            aguardar_carregamento_meli(page, tempo_max=15)
+            return True
+    except Exception:
+        pass
+
+    # 2. Fallback com force=True caso o JS não tenha encontrado de primeira
+    try:
+        btn = page.locator('button:has-text("Limpar todos"), text="Limpar todos"').first
+        if btn.count() > 0 and btn.is_visible():
+            log_painel("🧹 Limpando todos os filtros da tela do Mercado Livre...")
+            btn.click(force=True, timeout=5000)
+            aguardar_carregamento_meli(page, tempo_max=15)
+            return True
+    except Exception:
+        pass
+
     return False
+
+def garantir_deposito_sem_filtro(page):
+    """Garante que nenhuma tag de HUB anterior (ex: BRXSP10) ficou presa quando a tarefa é TODOS"""
+    for _ in range(3):
+        pulsar_watchdog()
+        try:
+            combo = page.locator('button.compact-selector__trigger[aria-label="Depósito"], button[role="combobox"][aria-label="Depósito"]').first
+            if combo.count() == 0:
+                return True
+            tags = [t.strip() for t in combo.locator('.andes-tag__label').all_inner_texts() if t.strip()]
+            if not tags:
+                return True
+
+            log_painel(f"⚠️ Removendo filtro anterior residual ({', '.join(tags)}) para liberar leitura Global...")
+            clicar_limpar_todos_filtros(page)
+
+            # Se mesmo após 'Limpar todos' a tag continuar, clica no 'X' da tag ou desmarca dentro do seletor
+            tags_ainda = [t.strip() for t in combo.locator('.andes-tag__label').all_inner_texts() if t.strip()]
+            if tags_ainda:
+                page.evaluate("""() => {
+                    const botoesFecharTag = document.querySelectorAll('button[aria-label="Depósito"] .andes-tag__close, .andes-tag__close');
+                    botoesFecharTag.forEach(b => b.click());
+                }""")
+                aguardar_carregamento_meli(page, tempo_max=12)
+        except Exception:
+            break
+    return True
 
 def extrair_cards_visiveis_js(page, hub_alvo):
     """Lê todos os cards renderizados na página instantaneamente via JavaScript no navegador"""
@@ -556,78 +601,120 @@ def extrair_cards_visiveis_js(page, hub_alvo):
         return []
 
 def obter_total_rotas_painel_meli(page) -> int:
-    """Lê o contador oficial de Rotas no topo da página do Mercado Livre"""
+    """Lê o contador oficial de Rotas no topo da página do Mercado Livre (ex: 1.250)"""
     try:
         total = page.evaluate("""() => {
-            const stats = document.querySelector('.stats');
-            if (!stats) return 0;
-            const texto = stats.innerText || '';
-            const m = texto.match(/Rotas[\\s\\n]+(\\d[\\d\\.]*)/i);
-            if (m && m[1]) return parseInt(m[1].replace(/\\D/g, ''), 10) || 0;
+            const seletores = ['.stats', '[data-testid*="stats" i]', 'main', 'body'];
+            for (const sel of seletores) {
+                const el = document.querySelector(sel);
+                if (!el) continue;
+                const texto = el.innerText || '';
+                const m = texto.match(/Rotas[\\s\\n:]+(\\d[\\d\\.]*)/i);
+                if (m && m[1]) {
+                    const num = parseInt(m[1].replace(/\\D/g, ''), 10);
+                    if (num > 0) return num;
+                }
+            }
             return 0;
         }""")
         return int(total or 0)
     except Exception:
         return 0
 
-def obter_primeiro_id_rota_visivel(page) -> str:
-    """Retorna o ID da primeira rota visível no topo da lista para confirmar mudança de página"""
+def obter_assinatura_ids_visiveis(page) -> str:
+    """Retorna uma assinatura com os 5 primeiros IDs de rota visíveis na tela para confirmar mudança de página"""
     try:
         return page.evaluate("""() => {
-            const el = document.querySelector('div.list .button-copy__text, div.monitoring-row .button-copy__text');
-            return el ? (el.textContent || '').replace(/[^0-9]/g, '') : '';
+            const els = Array.from(document.querySelectorAll('div.list .button-copy__text, div.monitoring-row .button-copy__text')).slice(0, 5);
+            return els.map(e => (e.textContent || '').replace(/[^0-9]/g, '')).filter(Boolean).join(',');
         }""") or ""
     except Exception:
         return ""
 
-def ir_para_proxima_pagina_meli(page, proxima_pag: int, primeiro_id_antes: str) -> bool:
-    """Avança para a próxima página via JS e retorna False imediatamente se não houver nova página"""
+def botao_proxima_pagina_disponivel(page, proxima_pag: int) -> bool:
+    """Verifica se existe botão para a próxima página habilitado no rodapé"""
     try:
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        time.sleep(0.8)
-
-        clicou = page.evaluate("""(numPag) => {
+        return bool(page.evaluate("""(numPag) => {
             const nav = document.querySelector('nav[aria-label*="Pagina" i], ul.andes-pagination, .andes-pagination');
             if (!nav) return false;
-
             const liNext = nav.querySelector('.andes-pagination__button--next');
             if (liNext && !liNext.classList.contains('andes-pagination__button--disabled')) {
                 const alvo = liNext.querySelector('a, button') || liNext;
-                if (alvo && alvo.getAttribute('aria-disabled') !== 'true' && !alvo.disabled) {
-                    alvo.scrollIntoView({ block: 'center' });
-                    alvo.click();
-                    return true;
-                }
+                if (alvo && alvo.getAttribute('aria-disabled') !== 'true' && !alvo.disabled) return true;
             }
-
             const botoes = Array.from(nav.querySelectorAll('li.andes-pagination__button:not(.andes-pagination__button--disabled) a, li.andes-pagination__button:not(.andes-pagination__button--disabled) button'));
-            for (const b of botoes) {
-                const txt = (b.innerText || b.textContent || '').trim();
-                if (txt === String(numPag)) {
-                    b.scrollIntoView({ block: 'center' });
-                    b.click();
-                    return true;
-                }
-            }
-            return false;
-        }""", proxima_pag)
-
-        if not clicou:
-            return False
-
-        fim_espera = time.time() + 10
-        while time.time() < fim_espera:
-            pulsar_watchdog()
-            time.sleep(0.6)
-            novo_id = obter_primeiro_id_rota_visivel(page)
-            spinners = page.locator('.andes-spinner:visible, .andes-skeleton:visible, [aria-busy="true"]:visible').count()
-            if spinners == 0 and novo_id and novo_id != primeiro_id_antes:
-                time.sleep(0.8)
-                return True
-
-        return False
+            return botoes.some(b => (b.innerText || b.textContent || '').trim() === String(numPag));
+        }""", proxima_pag))
     except Exception:
         return False
+
+def ir_para_proxima_pagina_meli(page, proxima_pag: int, assinatura_antes: str) -> bool:
+    """Avança para a próxima página com até 3 tentativas e aguarda até 25s os novos cards renderizarem"""
+    for tentativa_pag in range(3):
+        pulsar_watchdog()
+        try:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(0.8)
+
+            if not botao_proxima_pagina_disponivel(page, proxima_pag):
+                return False
+
+            # Clica tanto via Playwright (force=True) quanto via JS para garantir disparo no React do Meli
+            clicou = False
+            btn_next_loc = page.locator('.andes-pagination__button--next:not(.andes-pagination__button--disabled) a, .andes-pagination__button--next:not(.andes-pagination__button--disabled) button').first
+            if btn_next_loc.count() > 0 and btn_next_loc.is_visible():
+                try:
+                    btn_next_loc.scroll_into_view_if_needed()
+                    btn_next_loc.click(force=True, timeout=5000)
+                    clicou = True
+                except Exception:
+                    pass
+
+            if not clicou:
+                clicou = bool(page.evaluate("""(numPag) => {
+                    const nav = document.querySelector('nav[aria-label*="Pagina" i], ul.andes-pagination, .andes-pagination');
+                    if (!nav) return false;
+                    const liNext = nav.querySelector('.andes-pagination__button--next');
+                    if (liNext && !liNext.classList.contains('andes-pagination__button--disabled')) {
+                        const alvo = liNext.querySelector('a, button') || liNext;
+                        if (alvo && alvo.getAttribute('aria-disabled') !== 'true' && !alvo.disabled) {
+                            alvo.scrollIntoView({ block: 'center' });
+                            alvo.click();
+                            return true;
+                        }
+                    }
+                    const botoes = Array.from(nav.querySelectorAll('li.andes-pagination__button:not(.andes-pagination__button--disabled) a, li.andes-pagination__button:not(.andes-pagination__button--disabled) button'));
+                    for (const b of botoes) {
+                        if ((b.innerText || b.textContent || '').trim() === String(numPag)) {
+                            b.scrollIntoView({ block: 'center' });
+                            b.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }""", proxima_pag))
+
+            if not clicou:
+                return False
+
+            # Aguarda até 20 segundos a lista de cards mudar (páginas de TODOS com +1.000 rotas podem levar 12s+)
+            fim_espera = time.time() + 20
+            while time.time() < fim_espera:
+                pulsar_watchdog()
+                time.sleep(0.7)
+                spinners = page.locator('.andes-spinner:visible, .andes-skeleton:visible, [aria-busy="true"]:visible').count()
+                if spinners > 0:
+                    continue
+                nova_assinatura = obter_assinatura_ids_visiveis(page)
+                if nova_assinatura and nova_assinatura != assinatura_antes:
+                    time.sleep(0.8)
+                    return True
+
+            # Se após 20s ainda não trocou, tenta clicar mais uma vez (tentativa_pag + 1)
+        except Exception:
+            time.sleep(1.0)
+
+    return False
 
 def executar_raspagem(page, hub_alvo):
     for tentativa in range(2):
@@ -640,7 +727,7 @@ def executar_raspagem(page, hub_alvo):
                     wait_until="domcontentloaded",
                     timeout=60000
                 )
-                aguardar_carregamento_meli(page, tempo_max=12)
+                aguardar_carregamento_meli(page, tempo_max=15)
             else:
                 time.sleep(2)
             
@@ -652,8 +739,9 @@ def executar_raspagem(page, hub_alvo):
                     wait_until="domcontentloaded",
                     timeout=60000
                 )
-                aguardar_carregamento_meli(page, tempo_max=12)
+                aguardar_carregamento_meli(page, tempo_max=15)
 
+            # 1. Sempre limpa todos os filtros antes de começar
             clicar_limpar_todos_filtros(page)
 
             if hub_alvo != "TODOS":
@@ -701,6 +789,8 @@ def executar_raspagem(page, hub_alvo):
                     if tentativa == 0:
                         continue
             else:
+                # Garante que nenhuma tag de HUB anterior ficou presa no botão Depósito!
+                garantir_deposito_sem_filtro(page)
                 log_painel("🌎 Filtros limpos! Raspando TODAS as rotas disponíveis no sistema.")
 
             parar_aviso_raspagem = threading.Event()
@@ -718,19 +808,31 @@ def executar_raspagem(page, hub_alvo):
             data_hoje_str = pd.Timestamp.now().strftime('%d/%m/%Y')
             
             try:
-                page.wait_for_selector(seletor_cards, timeout=20000)
+                page.wait_for_selector(seletor_cards, timeout=25000)
                 total_esperado = obter_total_rotas_painel_meli(page)
+                if total_esperado > 0:
+                    log_painel(f"📊 Painel Meli informa: {total_esperado} rota(s) disponíveis para {hub_alvo}.")
 
+                # Permite até 20 minutos (1200s) e até 100 páginas (5.000 rotas) para varrer TODOS os depósitos
                 inicio_paginacao_hub = time.time()
-                while (time.time() - inicio_paginacao_hub) < 180:
-                    pulsar_watchdog()
-                    primeiro_id_pagina = obter_primeiro_id_rota_visivel(page)
-                    qtd_antes_pagina = len(mapa_rotas_capturadas)
+                paginas_sem_novas = 0
 
-                    page.evaluate("window.scrollTo(0, 0)")
+                while (time.time() - inicio_paginacao_hub) < 1200 and pagina_atual <= 100:
+                    pulsar_watchdog()
+
+                    # 1. Rola para o TOPO antes de ler a assinatura da página atual
+                    page.evaluate("""() => {
+                        window.scrollTo(0, 0);
+                        const lista = document.querySelector('div.list');
+                        if (lista) lista.scrollTop = 0;
+                    }""")
                     time.sleep(0.6)
 
-                    for passo_scroll in range(15):
+                    assinatura_pagina = obter_assinatura_ids_visiveis(page)
+                    qtd_antes_pagina = len(mapa_rotas_capturadas)
+
+                    # 2. Rola gradualmente até o fim da página para capturar todos os 50 cards
+                    for passo_scroll in range(18):
                         pulsar_watchdog()
                         lote_visivel = extrair_cards_visiveis_js(page, hub_alvo)
                         for item in lote_visivel:
@@ -756,27 +858,42 @@ def executar_raspagem(page, hub_alvo):
                                 "data": data_hoje_str
                             }
 
+                        # Se já capturou os 50 cards desta página, não precisa continuar rolando à toa
+                        if (len(mapa_rotas_capturadas) - qtd_antes_pagina) >= 50:
+                            break
+
                         chegou_ao_fim = page.evaluate("""() => {
                             const lista = document.querySelector('div.list');
+                            let moveuLista = false;
                             if (lista && lista.scrollHeight > lista.clientHeight + 20) {
+                                const antesL = lista.scrollTop;
                                 lista.scrollBy(0, 650);
+                                moveuLista = (lista.scrollTop > antesL);
                             }
-                            const antes = window.scrollY;
+                            const antesW = window.scrollY;
                             window.scrollBy(0, 650);
-                            return (window.innerHeight + window.scrollY) >= (document.body.scrollHeight - 15) && (window.scrollY === antes);
+                            const moveuWin = (window.scrollY > antesW);
+                            return !moveuLista && !moveuWin;
                         }""")
                         time.sleep(0.35)
-                        if chegou_ao_fim and passo_scroll >= 4:
+                        if chegou_ao_fim and passo_scroll >= 5:
                             break
 
                     novas_nesta_pagina = len(mapa_rotas_capturadas) - qtd_antes_pagina
-
                     if novas_nesta_pagina == 0:
-                        break
-                    if (total_esperado > 0 and len(mapa_rotas_capturadas) >= total_esperado) or pagina_atual >= 15:
+                        paginas_sem_novas += 1
+                    else:
+                        paginas_sem_novas = 0
+
+                    # Se já atingiu o total oficial do painel do Meli, conclui
+                    if total_esperado > 0 and len(mapa_rotas_capturadas) >= total_esperado:
                         break
 
-                    if ir_para_proxima_pagina_meli(page, pagina_atual + 1, primeiro_id_pagina):
+                    # Só para por falta de novas rotas se 2 páginas seguidas vierem zeradas E não houver próxima página
+                    if paginas_sem_novas >= 2:
+                        break
+
+                    if ir_para_proxima_pagina_meli(page, pagina_atual + 1, assinatura_pagina):
                         pagina_atual += 1
                         continue
                     break
@@ -886,187 +1003,6 @@ def executar_raspagem(page, hub_alvo):
         except Exception as e:
             detalhe_erro = str(e).splitlines()[0] if str(e) else "Erro desconhecido"
             log_painel(f"⚠️ Erro na tentativa {tentativa+1} ({hub_alvo}): {detalhe_erro}")
-            time.sleep(3)
-            
-    return False
-
-# ==========================================
-# MÓDULO 2: DOWNLOAD DE RELATÓRIO (COM ESPERA DE CARREGAMENTO ATÉ 30S)
-# ==========================================
-def executar_relatorio(page, lista_hubs, ticket):
-    for tentativa in range(2):
-        try:
-            log_painel(f"📥 [RELATÓRIO] Extraindo dados para: {', '.join(lista_hubs)}")
-            if not os.path.exists(PASTA_TEMP):
-                os.makedirs(PASTA_TEMP, exist_ok=True)
-                
-            page.goto("https://envios.adminml.com/logistics/reports/first-mile/reports-collections/query", wait_until="domcontentloaded", timeout=60000)
-            time.sleep(5)
-
-            if pagina_esta_no_okta(page):
-                log_painel("🔐 Sessão pediu reautenticação ao abrir relatório. Verificando login...")
-                garantir_login(page)
-                page.goto("https://envios.adminml.com/logistics/reports/first-mile/reports-collections/query", wait_until="domcontentloaded", timeout=60000)
-                time.sleep(5)
-            
-            regras_str = ticket.get("regras", "{}")
-            try:
-                regras = json.loads(regras_str) if isinstance(regras_str, str) else regras_str
-            except Exception:
-                regras = {}
-            
-            exportar_local = regras.get("exportar_local", "sistema")
-            
-            log_painel("📅 Selecionando filtro de data: Hoje")
-            try:
-                campo_data = page.locator('#input-date-rangeweek').first
-                campo_data.wait_for(state="visible", timeout=15000)
-                campo_data.click()
-                time.sleep(1.2)
-                
-                btn_hoje = page.locator('td[data-today="true"] button').first
-                if btn_hoje.count() > 0 and btn_hoje.is_visible():
-                    btn_hoje.click()
-                    time.sleep(0.5)
-                else:
-                    hoje_str = datetime.datetime.now().strftime('%Y-%m-%d')
-                    btn_fallback = page.locator(f'td[data-day="{hoje_str}"] button').first
-                    if btn_fallback.count() > 0 and btn_fallback.is_visible():
-                        btn_fallback.click()
-                    time.sleep(0.5)
-                    
-                btn_aplicar_data = page.locator('span[data-andes-button-content="true"]:has-text("Aplicar")').first
-                if btn_aplicar_data.count() > 0 and btn_aplicar_data.is_visible():
-                    btn_aplicar_data.click()
-                time.sleep(1.5)
-            except Exception as e:
-                log_painel(f"⚠️ Aviso ao selecionar data: {str(e).splitlines()[0]}")
-            
-            if "TODOS" not in lista_hubs:
-                marcados = 0
-                for h in lista_hubs:
-                    label_hub = page.locator(f'label.andes-checkbox:has-text("{h}")').first
-                    if label_hub.count() > 0 and label_hub.is_visible():
-                        label_hub.locator('input[type="checkbox"]').check(force=True)
-                        marcados += 1
-                        time.sleep(0.5)
-                    else:
-                        log_painel(f"⚠️ HUB {h} ignorado (Não encontrado na lista de depósitos).")
-                        
-                if marcados == 0:
-                    log_painel("❌ Erro: Nenhum HUB válido para relatório.")
-                    return False
-            else:
-                log_painel("🌎 Extraindo relatório Global (Sem filtro de depósito).")
-                
-            btn_ver = page.locator('span[data-andes-button-content="true"]:has-text("Ver resultados")').first
-            if btn_ver.count() > 0 and btn_ver.is_visible():
-                btn_ver.click()
-                
-            log_painel("⏳ Aguardando processamento do relatório no Mercado Livre...")
-            botao_baixar = page.locator('button[data-andes-button="true"]:has(span:has-text("Baixar"))').first
-            
-            habilitou_baixar = False
-            for _ in range(15):
-                pulsar_watchdog()
-                time.sleep(2)
-                if botao_baixar.count() > 0 and botao_baixar.is_visible() and not botao_baixar.is_disabled():
-                    habilitou_baixar = True
-                    break
-                if page.locator("text=Não foram encontrados resultados, text=Sem resultados").count() > 0:
-                    break
-            
-            if not habilitou_baixar:
-                log_painel(f"📭 Não há resultados de paradas disponíveis para ({', '.join(lista_hubs)}) após aguardar carregamento.")
-                return True 
-                
-            with page.expect_download(timeout=60000) as download_info:
-                botao_baixar.click()
-                
-            caminho_arquivo = os.path.join(PASTA_TEMP, download_info.value.suggested_filename)
-            download_info.value.save_as(caminho_arquivo)
-            
-            try:
-                if caminho_arquivo.endswith('.csv'): 
-                    try:
-                        df = pd.read_csv(caminho_arquivo, encoding='utf-8')
-                    except Exception:
-                        df = pd.read_csv(caminho_arquivo, sep=None, engine='python', encoding='latin1')
-                else: 
-                    df = pd.read_excel(caminho_arquivo)
-                
-                insp = inspect(motor_db)
-                df.columns = df.columns.str.strip()
-
-                colunas_uteis_rel = [
-                    'ID do Rota', 'Nome da Rota', 'Data da rota', 'Data', 'ID do Motorista',
-                    'Tipo de parada', 'Parada', 'ID de Parada', 'Horários', 'ONTIME',
-                    'Pontualidade', 'Hora de coleta concluída', 'Pacotes coletados',
-                    'Pacotes estimados', 'Pacotes preparados', 'Tipo do Rota',
-                    'Motivo', 'Detalhes', 'Pacotes não preparados/Não estão na agência',
-                    'Pacotes não cabem no veículo', 'Pacotes em mau estado'
-                ]
-                cols_manter = [c for c in colunas_uteis_rel if c in df.columns]
-                if len(cols_manter) >= 5:
-                    df = df[cols_manter].copy()
-
-                qtd_linhas = len(df)
-                
-                if insp.has_table('rotas_brutas'):
-                    try:
-                        colunas_existentes = [c['name'] for c in insp.get_columns('rotas_brutas')]
-                        novas_cols = [c for c in df.columns if c not in colunas_existentes]
-                        if novas_cols:
-                            with motor_db.begin() as conn:
-                                for c in novas_cols:
-                                    conn.execute(text(f'ALTER TABLE rotas_brutas ADD COLUMN "{c}" TEXT;'))
-
-                        if 'ID do Rota' in df.columns and 'ID do Rota' in colunas_existentes:
-                            ids_novos = [str(x).strip() for x in df['ID do Rota'].dropna().unique().tolist() if str(x).strip()]
-                            with motor_db.begin() as conn:
-                                for i in range(0, len(ids_novos), 500):
-                                    lote = ids_novos[i:i+500]
-                                    params = {f"id_{j}": val for j, val in enumerate(lote)}
-                                    placeholders = ", ".join([f":id_{j}" for j in range(len(lote))])
-                                    conn.execute(text(f'DELETE FROM rotas_brutas WHERE TRIM(CAST("ID do Rota" AS TEXT)) IN ({placeholders})'), params)
-                            
-                            df.to_sql('rotas_brutas', con=motor_db, if_exists='append', index=False, chunksize=1000)
-                        else:
-                            df.to_sql('rotas_brutas', con=motor_db, if_exists='replace', index=False, chunksize=1000)
-                            
-                        log_painel(f"✅ Relatório sincronizado ({qtd_linhas} linhas processadas).")
-                    except Exception as e:
-                        log_painel(f"⚠️ Aviso ao mesclar via SQL ({e}). Atualizando tabela...")
-                        df.to_sql('rotas_brutas', con=motor_db, if_exists='replace', index=False, chunksize=1000)
-                else:
-                    df.to_sql('rotas_brutas', con=motor_db, if_exists='replace', index=False, chunksize=1000)
-                
-                del df
-                gc.collect()
-            except Exception as e:
-                log_painel(f"⚠️ Erro ao processar arquivo no DB: {e}")
-                
-            if exportar_local == "local":
-                try:
-                    pasta_export = os.path.join(PASTA_TEMP, "downloads_pc")
-                    os.makedirs(pasta_export, exist_ok=True)
-                    
-                    extensao = ".csv" if caminho_arquivo.endswith('.csv') else ".xlsx"
-                    prefixo = "Global" if "TODOS" in lista_hubs else lista_hubs[0]
-                    nome_pc = f"Relatorio_{prefixo}_{datetime.datetime.now().strftime('%d%m%Y_%H%M%S')}{extensao}"
-                    shutil.copy(caminho_arquivo, os.path.join(pasta_export, nome_pc))
-                    log_painel(f"💾 [DOWNLOAD_PC:{nome_pc}] Transferindo relatório para o seu computador...")
-                except Exception as e:
-                    log_painel(f"❌ Erro ao preparar download para o PC: {e}")
-            
-            if os.path.exists(caminho_arquivo):
-                os.remove(caminho_arquivo)
-                
-            return True
-            
-        except Exception as e:
-            detalhe = str(e).splitlines()[0] if str(e) else "Erro desconhecido"
-            log_painel(f"⚠️ Erro de página no relatório (Tentativa {tentativa+1}): {detalhe}")
             time.sleep(3)
             
     return False
