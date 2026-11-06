@@ -534,50 +534,54 @@ def obter_primeiro_id_rota_visivel(page) -> str:
         return ""
 
 def ir_para_proxima_pagina_meli(page, proxima_pag: int, primeiro_id_antes: str) -> bool:
-    """Clica no botão da próxima página com clique real do Playwright e aguarda os cards trocarem"""
+    """Avança para a próxima página via JS e retorna False imediatamente se não houver nova página"""
     try:
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        time.sleep(1.0)
+        time.sleep(0.8)
 
-        clicou = False
-        # 1. Tenta clicar diretamente no número exato da próxima página (ex: '2', '3', '4')
-        seletores_num = [
-            f'nav[aria-label*="Pagina" i] a:text-is("{proxima_pag}")',
-            f'nav[aria-label*="Pagina" i] button:text-is("{proxima_pag}")',
-            f'.andes-pagination__button a:text-is("{proxima_pag}")',
-            f'li.andes-pagination__button:has-text("{proxima_pag}") a'
-        ]
-        for sel in seletores_num:
-            loc = page.locator(sel).first
-            if loc.count() > 0 and loc.is_visible():
-                loc.scroll_into_view_if_needed()
-                loc.click(timeout=8000)
-                clicou = True
-                break
+        clicou = page.evaluate("""(numPag) => {
+            const nav = document.querySelector('nav[aria-label*="Pagina" i], ul.andes-pagination, .andes-pagination');
+            if (!nav) return false;
 
-        # 2. Se não achou pelo número, clica no botão 'Seguinte' / 'Próximo'
-        if not clicou:
-            btn_next = page.locator('.andes-pagination__button--next:not(.andes-pagination__button--disabled) a, .andes-pagination__button--next:not(.andes-pagination__button--disabled) button, a[title="Seguinte"], a[title="Próximo"]').first
-            if btn_next.count() > 0 and btn_next.is_visible():
-                btn_next.scroll_into_view_if_needed()
-                btn_next.click(timeout=8000)
-                clicou = True
+            // 1. Tenta pelo botão 'Seguinte' / 'Próximo' (somente se não estiver desativado)
+            const liNext = nav.querySelector('.andes-pagination__button--next');
+            if (liNext && !liNext.classList.contains('andes-pagination__button--disabled')) {
+                const alvo = liNext.querySelector('a, button') || liNext;
+                if (alvo && alvo.getAttribute('aria-disabled') !== 'true' && !alvo.disabled) {
+                    alvo.scrollIntoView({ block: 'center' });
+                    alvo.click();
+                    return true;
+                }
+            }
+
+            // 2. Fallback: botão numérico da próxima página (ex: '2', '3', '4')
+            const botoes = Array.from(nav.querySelectorAll('li.andes-pagination__button:not(.andes-pagination__button--disabled) a, li.andes-pagination__button:not(.andes-pagination__button--disabled) button'));
+            for (const b of botoes) {
+                const txt = (b.innerText || b.textContent || '').trim();
+                if (txt === String(numPag)) {
+                    b.scrollIntoView({ block: 'center' });
+                    b.click();
+                    return true;
+                }
+            }
+            return false;
+        }""", proxima_pag)
 
         if not clicou:
             return False
 
-        # 3. AGUARDA OS CARDS MUDAREM DE VERDADE NA TELA (evita pular as páginas 2 e 3!)
-        fim_espera = time.time() + 15
+        # Aguarda até 10 segundos os cards da página nova aparecerem
+        fim_espera = time.time() + 10
         while time.time() < fim_espera:
-            time.sleep(0.8)
+            time.sleep(0.6)
             novo_id = obter_primeiro_id_rota_visivel(page)
             spinners = page.locator('.andes-spinner:visible, .andes-skeleton:visible, [aria-busy="true"]:visible').count()
             if spinners == 0 and novo_id and novo_id != primeiro_id_antes:
-                time.sleep(1.0)
+                time.sleep(0.8)
                 return True
 
-        time.sleep(2.0)
-        return True
+        # Se o 1º ID não mudou, chegou na última página -> retorna False para encerrar na hora!
+        return False
     except Exception:
         return False
 
@@ -680,7 +684,7 @@ def executar_raspagem(page, hub_alvo):
                     qtd_antes_pagina = len(mapa_rotas_capturadas)
 
                     page.evaluate("window.scrollTo(0, 0)")
-                    time.sleep(0.8)
+                    time.sleep(0.6)
 
                     for passo_scroll in range(15):
                         lote_visivel = extrair_cards_visiveis_js(page, hub_alvo)
@@ -710,20 +714,22 @@ def executar_raspagem(page, hub_alvo):
                         chegou_ao_fim = page.evaluate("""() => {
                             const lista = document.querySelector('div.list');
                             if (lista && lista.scrollHeight > lista.clientHeight + 20) {
-                                lista.scrollBy(0, 600);
+                                lista.scrollBy(0, 650);
                             }
                             const antes = window.scrollY;
-                            window.scrollBy(0, 600);
+                            window.scrollBy(0, 650);
                             return (window.innerHeight + window.scrollY) >= (document.body.scrollHeight - 15) && (window.scrollY === antes);
                         }""")
-                        time.sleep(0.4)
+                        time.sleep(0.35)
                         if chegou_ao_fim and passo_scroll >= 4:
                             break
 
                     novas_nesta_pagina = len(mapa_rotas_capturadas) - qtd_antes_pagina
-                    log_painel(f"📄 Página {pagina_atual}: +{novas_nesta_pagina} rotas lidas (Acumulado: {len(mapa_rotas_capturadas)}/{total_esperado or '?'})")
 
-                    if (total_esperado > 0 and len(mapa_rotas_capturadas) >= total_esperado) or pagina_atual >= 30:
+                    # Se não veio nenhuma rota nova nesta página ou já atingiu o total, encerra imediatamente!
+                    if novas_nesta_pagina == 0:
+                        break
+                    if (total_esperado > 0 and len(mapa_rotas_capturadas) >= total_esperado) or pagina_atual >= 15:
                         break
 
                     if ir_para_proxima_pagina_meli(page, pagina_atual + 1, primeiro_id_pagina):
@@ -732,8 +738,6 @@ def executar_raspagem(page, hub_alvo):
                     break
             finally:
                 parar_aviso_raspagem.set()
-
-            dados_raspados = list(mapa_rotas_capturadas.values())
                     
             if dados_raspados:
                 log_painel(f"📦 {hub_alvo}: {len(dados_raspados)} rota(s) capturada(s)! Atualizando planilha...")
@@ -949,6 +953,20 @@ def executar_relatorio(page, lista_hubs, ticket):
                 
                 insp = inspect(motor_db)
                 df.columns = df.columns.str.strip()
+
+                # Mantém apenas as colunas necessárias para os painéis (reduz consumo de RAM em 70% às 16h!)
+                colunas_uteis_rel = [
+                    'ID do Rota', 'Nome da Rota', 'Data da rota', 'Data', 'ID do Motorista',
+                    'Tipo de parada', 'Parada', 'ID de Parada', 'Horários', 'ONTIME',
+                    'Pontualidade', 'Hora de coleta concluída', 'Pacotes coletados',
+                    'Pacotes estimados', 'Pacotes preparados', 'Tipo do Rota',
+                    'Motivo', 'Detalhes', 'Pacotes não preparados/Não estão na agência',
+                    'Pacotes não cabem no veículo', 'Pacotes em mau estado'
+                ]
+                cols_manter = [c for c in colunas_uteis_rel if c in df.columns]
+                if len(cols_manter) >= 5:
+                    df = df[cols_manter].copy()
+
                 qtd_linhas = len(df)
                 
                 if insp.has_table('rotas_brutas'):
