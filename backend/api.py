@@ -1,7 +1,8 @@
 import os
 import re
 import time
-from fastapi import FastAPI, Request
+import threading
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -11,13 +12,12 @@ import datetime
 from sqlalchemy import create_engine, text, inspect
 from dotenv import load_dotenv
 
-# Garante que vai localizar o .env na mesma pasta que este api.py
 caminho_env = os.path.join(os.path.dirname(__file__), '.env')
 load_dotenv(caminho_env)
 
 app = FastAPI(title="API - Monitoramento Logístico")
 
-# Comprime respostas grandes (como /rotas_brutas) em até 90%, acelerando o carregamento
+# Comprime respostas grandes em até 90%
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
@@ -28,7 +28,6 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# Puxa a string de conexão segura do .env com proteção contra queda de conexão
 string_conexao = os.getenv("DATABASE_URL")
 if not string_conexao:
     raise ValueError("ERRO: A variável DATABASE_URL não foi encontrada no ficheiro .env")
@@ -41,23 +40,42 @@ motor_db = create_engine(
     max_overflow=10
 )
 
-# Cache em memória para evitar leitura pesada repetitiva no servidor de 1 vCPU
+# ==========================================
+# CACHE EM MEMÓRIA DE ALTA VELOCIDADE (JSON PRÉ-SERIALIZADO)
+# ==========================================
 CACHE_DADOS = {
-    "rotas": None,
+    "rotas_json": None,
     "rotas_ts": 0,
-    "rotas_brutas": None,
-    "rotas_brutas_ts": 0
+    "rotas_brutas_json": None,
+    "rotas_brutas_ts": 0,
+    "ocorrencias_json": None,
+    "ocorrencias_ts": 0
 }
 
 def invalidar_cache_rotas():
-    CACHE_DADOS["rotas"] = None
+    CACHE_DADOS["rotas_json"] = None
     CACHE_DADOS["rotas_ts"] = 0
 
 def invalidar_cache_brutas():
-    CACHE_DADOS["rotas_brutas"] = None
+    CACHE_DADOS["rotas_brutas_json"] = None
     CACHE_DADOS["rotas_brutas_ts"] = 0
 
-motor_db = create_engine(string_conexao)
+def invalidar_cache_ocorrencias():
+    CACHE_DADOS["ocorrencias_json"] = None
+    CACHE_DADOS["ocorrencias_ts"] = 0
+
+def aquecer_cache_background():
+    """Pré-carrega os dados em memória assim que a API inicia para o 1º acesso ser instantâneo"""
+    time.sleep(1)
+    try:
+        construir_json_rotas()
+        construir_json_rotas_brutas()
+    except Exception:
+        pass
+
+@app.on_event("startup")
+def ao_iniciar_api():
+    threading.Thread(target=aquecer_cache_background, daemon=True).start()
 
 # ==========================================
 # GESTÃO DE USUÁRIOS E LOGIN
@@ -166,23 +184,35 @@ async def deletar_meta(request: Request):
         return {"sucesso": False, "erro": str(e)}
 
 # ==========================================
-# EDIÇÕES DE OCORRÊNCIAS (REVERTIDO E OBSERVAÇÕES)
+# EDIÇÕES DE OCORRÊNCIAS (VETORIZADO E COM CACHE)
 # ==========================================
 @app.get("/ocorrencias_edicoes")
 def listar_edicoes_ocorrencias():
+    agora = time.time()
+    if CACHE_DADOS["ocorrencias_json"] is not None and (agora - CACHE_DADOS["ocorrencias_ts"]) < 300:
+        return Response(content=CACHE_DADOS["ocorrencias_json"], media_type="application/json")
+
     try:
         insp = inspect(motor_db)
         if not insp.has_table('controle_ocorrencias'):
             return {}
         df = pd.read_sql_table('controle_ocorrencias', con=motor_db).fillna("")
-        resultado = {}
-        for _, r in df.iterrows():
-            resultado[str(r['chave'])] = {
-                "id_rota": str(r.get('id_rota', '')),
-                "revertido": str(r.get('revertido', 'NÃO')),
-                "observacao": str(r.get('observacao', ''))
-            }
-        return resultado
+        if df.empty:
+            return {}
+        
+        chaves = df['chave'].astype(str).tolist()
+        ids = df['id_rota'].astype(str).tolist() if 'id_rota' in df.columns else [''] * len(df)
+        revs = df['revertido'].astype(str).tolist() if 'revertido' in df.columns else ['NÃO'] * len(df)
+        obss = df['observacao'].astype(str).tolist() if 'observacao' in df.columns else [''] * len(df)
+
+        resultado = {
+            k: {"id_rota": ir, "revertido": rv if rv else "NÃO", "observacao": ob}
+            for k, ir, rv, ob in zip(chaves, ids, revs, obss)
+        }
+        json_str = json.dumps(resultado, ensure_ascii=False)
+        CACHE_DADOS["ocorrencias_json"] = json_str
+        CACHE_DADOS["ocorrencias_ts"] = agora
+        return Response(content=json_str, media_type="application/json")
     except Exception:
         return {}
 
@@ -222,93 +252,119 @@ async def salvar_edicao_ocorrencia(request: Request):
 
         if id_rota:
             try:
-                insp = inspect(motor_db)
-                if insp.has_table('rotas_monitoramento'):
-                    df_rotas = pd.read_sql_table('rotas_monitoramento', con=motor_db)
-                    df_rotas['id_rota'] = df_rotas['id_rota'].astype(str)
-                    if 'revertido' not in df_rotas.columns:
-                        df_rotas['revertido'] = ""
-                    if id_rota in df_rotas['id_rota'].values:
-                        df_rotas.loc[df_rotas['id_rota'] == id_rota, 'revertido'] = revertido
-                        df_rotas.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
+                with motor_db.begin() as conn:
+                    conn.execute(
+                        text('UPDATE rotas_monitoramento SET revertido = :rv WHERE id_rota = :ir'),
+                        {"rv": revertido, "ir": id_rota}
+                    )
             except Exception:
                 pass
-                invalidar_cache_rotas()
+            invalidar_cache_rotas()
+
+        invalidar_cache_ocorrencias()
         return {"sucesso": True}
     except Exception as e:
         return {"sucesso": False, "erro": str(e)}
 
 # ==========================================
-# ROTAS DO SISTEMA DE MONITORAMENTO
+# ROTAS DO SISTEMA DE MONITORAMENTO E BI (INSTANTÂNEAS)
 # ==========================================
+def construir_json_rotas() -> str:
+    insp = inspect(motor_db)
+    if not insp.has_table('rotas_monitoramento'):
+        return "[]"
+
+    df = pd.read_sql_table('rotas_monitoramento', con=motor_db).fillna("")
+    if df.empty:
+        CACHE_DADOS["rotas_json"] = "[]"
+        CACHE_DADOS["rotas_ts"] = time.time()
+        return "[]"
+
+    for col_obrigatoria in ['monitor', 'ocorrencia', 'revertido', 'observacoes', 'restante', 'status_manual']:
+        if col_obrigatoria not in df.columns:
+            df[col_obrigatoria] = ""
+
+    df['monitor'] = df['monitor'].astype(str).str.upper().str.strip()
+
+    est_series = pd.to_numeric(df['estimado_total'].astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce').fillna(0).astype(int)
+    col_series = pd.to_numeric(df['coletado_geral'].astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce').fillna(0).astype(int)
+    df['restante'] = (est_series - col_series).astype(str)
+
+    st_upper = df['status'].astype(str).str.strip().str.upper()
+    mask_sem_ini = st_upper.str.contains("SEM INÍCIO|SEM INICIO", regex=True, na=False)
+    mask_andamento = st_upper.str.contains("ANDAMENTO", na=False) | st_upper.isin(["INÍCIO", "INICIO"])
+    mask_concluida = st_upper.str.contains("CONCLU", na=False)
+    mask_finalizado = st_upper == "FINALIZADO"
+
+    if mask_sem_ini.any() or mask_andamento.any() or mask_concluida.any() or mask_finalizado.any():
+        df.loc[mask_sem_ini, 'status'] = "PENDENTE DE LOGIN"
+        df.loc[mask_andamento, 'status'] = "LOGADO"
+        df.loc[mask_concluida & (col_series > 0), 'status'] = "FINALIZADA"
+        df.loc[mask_concluida & (col_series <= 0), 'status'] = "CANCELADA"
+        df.loc[mask_finalizado, 'status'] = "FINALIZADA"
+        try:
+            df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
+        except Exception:
+            pass
+
+    json_str = df.to_json(orient="records", force_ascii=False)
+    CACHE_DADOS["rotas_json"] = json_str
+    CACHE_DADOS["rotas_ts"] = time.time()
+    return json_str
+
 @app.get("/rotas")
 def puxar_rotas():
     agora = time.time()
-    if CACHE_DADOS["rotas"] is not None and (agora - CACHE_DADOS["rotas_ts"]) < 15:
-        return CACHE_DADOS["rotas"]
+    # Cache válido por até 10 minutos (ou até o robô/usuário alterar algo, o que invalida na hora)
+    if CACHE_DADOS["rotas_json"] is not None and (agora - CACHE_DADOS["rotas_ts"]) < 600:
+        return Response(content=CACHE_DADOS["rotas_json"], media_type="application/json")
 
     try:
-        insp = inspect(motor_db)
-        if not insp.has_table('rotas_monitoramento'):
-            return []
-
-        df = pd.read_sql_table('rotas_monitoramento', con=motor_db).fillna("")
-        if df.empty:
-            CACHE_DADOS["rotas"] = []
-            CACHE_DADOS["rotas_ts"] = agora
-            return []
-
-        for col_obrigatoria in ['monitor', 'ocorrencia', 'revertido', 'observacoes', 'restante', 'status_manual']:
-            if col_obrigatoria not in df.columns:
-                df[col_obrigatoria] = ""
-
-        df['monitor'] = df['monitor'].astype(str).str.upper().str.strip()
-
-        est_series = pd.to_numeric(df['estimado_total'].astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce').fillna(0).astype(int)
-        col_series = pd.to_numeric(df['coletado_geral'].astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce').fillna(0).astype(int)
-        df['restante'] = (est_series - col_series).astype(str)
-
-        st_upper = df['status'].astype(str).str.strip().str.upper()
-        mask_sem_ini = st_upper.str.contains("SEM INÍCIO|SEM INICIO", regex=True, na=False)
-        mask_andamento = st_upper.str.contains("ANDAMENTO", na=False) | st_upper.isin(["INÍCIO", "INICIO"])
-        mask_concluida = st_upper.str.contains("CONCLU", na=False)
-        mask_finalizado = st_upper == "FINALIZADO"
-
-        if mask_sem_ini.any() or mask_andamento.any() or mask_concluida.any() or mask_finalizado.any():
-            df.loc[mask_sem_ini, 'status'] = "PENDENTE DE LOGIN"
-            df.loc[mask_andamento, 'status'] = "LOGADO"
-            df.loc[mask_concluida & (col_series > 0), 'status'] = "FINALIZADA"
-            df.loc[mask_concluida & (col_series <= 0), 'status'] = "CANCELADA"
-            df.loc[mask_finalizado, 'status'] = "FINALIZADA"
-            try:
-                df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
-            except Exception:
-                pass
-
-        resultado = df.to_dict(orient="records")
-        CACHE_DADOS["rotas"] = resultado
-        CACHE_DADOS["rotas_ts"] = agora
-        return resultado
+        json_str = construir_json_rotas()
+        return Response(content=json_str, media_type="application/json")
     except Exception as e: 
         return {"erro": str(e)}
+
+def construir_json_rotas_brutas() -> str:
+    insp = inspect(motor_db)
+    if not insp.has_table('rotas_brutas'):
+        return "[]"
+    
+    df = pd.read_sql_table('rotas_brutas', con=motor_db).fillna("")
+    if df.empty:
+        CACHE_DADOS["rotas_brutas_json"] = "[]"
+        CACHE_DADOS["rotas_brutas_ts"] = time.time()
+        return "[]"
+
+    colunas_uteis = [
+        'ID do Rota', 'Nome da Rota', 'Data da rota', 'Data', 'ID do Motorista',
+        'Tipo de parada', 'Parada', 'ID de Parada', 'Horários', 'ONTIME',
+        'Pontualidade', 'Hora de coleta concluída', 'Pacotes coletados',
+        'Pacotes estimados', 'Pacotes preparados', 'Tipo do Rota',
+        'Motivo', 'Detalhes', 'Pacotes não preparados/Não estão na agência',
+        'Pacotes não cabem no veículo', 'Pacotes em mau estado'
+    ]
+    cols_existentes = [c for c in colunas_uteis if c in df.columns]
+    if len(cols_existentes) >= 5:
+        df = df[cols_existentes]
+
+    json_str = df.to_json(orient="records", force_ascii=False)
+    CACHE_DADOS["rotas_brutas_json"] = json_str
+    CACHE_DADOS["rotas_brutas_ts"] = time.time()
+    return json_str
 
 @app.get("/rotas_brutas")
 def puxar_rotas_brutas():
     agora = time.time()
-    if CACHE_DADOS["rotas_brutas"] is not None and (agora - CACHE_DADOS["rotas_brutas_ts"]) < 60:
-        return CACHE_DADOS["rotas_brutas"]
+    # Cache válido por até 30 minutos (ou até o robô baixar um relatório novo)
+    if CACHE_DADOS["rotas_brutas_json"] is not None and (agora - CACHE_DADOS["rotas_brutas_ts"]) < 1800:
+        return Response(content=CACHE_DADOS["rotas_brutas_json"], media_type="application/json")
 
     try:
-        insp = inspect(motor_db)
-        if not insp.has_table('rotas_brutas'):
-            return []
-        df = pd.read_sql_table('rotas_brutas', con=motor_db)
-        resultado = df.fillna("").to_dict(orient="records")
-        CACHE_DADOS["rotas_brutas"] = resultado
-        CACHE_DADOS["rotas_brutas_ts"] = agora
-        return resultado
+        json_str = construir_json_rotas_brutas()
+        return Response(content=json_str, media_type="application/json")
     except Exception: 
-        return []
+        return Response(content="[]", media_type="application/json")
 
 @app.post("/salvar_escala")
 async def salvar_escala(request: Request):
@@ -374,13 +430,11 @@ async def adicionar_ticket(request: Request):
             df.to_sql('tickets_robo', con=motor_db, if_exists='replace', index=False)
 
         with motor_db.begin() as conn:
-            # Se estava editando um ticket existente e mudou o tipo dele, remove o original
             if tipo_original and tipo_original != tipo:
                 conn.execute(
                     text("DELETE FROM tickets_robo WHERE hub = :h AND acao = :a AND tipo = :to"),
                     {"h": hub, "a": acao, "to": tipo_original}
                 )
-            # Remove apenas o ticket do MESMO tipo (preserva a Rotina quando criar um Avulso e vice-versa!)
             conn.execute(
                 text("DELETE FROM tickets_robo WHERE hub = :h AND acao = :a AND tipo = :t"),
                 {"h": hub, "a": acao, "t": tipo}
@@ -452,13 +506,17 @@ def ping_robo():
 
 @app.post("/enviar_log")
 async def receber_log(request: Request):
+    global ultimo_heartbeat
+    ultimo_heartbeat = datetime.datetime.now()
     dados = await request.json()
     msg = dados.get("mensagem", "")
     registrar_log_interno(msg)
     if "CONCLUÍDO" in msg or "atualizando planilha" in msg.lower():
         invalidar_cache_rotas()
+        threading.Thread(target=construir_json_rotas, daemon=True).start()
     if "RELATÓRIO BAIXADO" in msg or "Relatório sincronizado" in msg:
         invalidar_cache_brutas()
+        threading.Thread(target=construir_json_rotas_brutas, daemon=True).start()
     return {"sucesso": True}
 
 @app.post("/enviar_codigo_okta")
@@ -498,11 +556,11 @@ async def solicitar_reinicio_login():
 
 @app.get("/obter_comando_okta")
 def obter_comando_okta():
-    global codigo_okta_pendente, forcar_reinicio_login, trocar_conta_pendente, conta_okta_ativa
+    global ultimo_heartbeat, codigo_okta_pendente, forcar_reinicio_login, trocar_conta_pendente, conta_okta_ativa
+    ultimo_heartbeat = datetime.datetime.now()
     cod = codigo_okta_pendente
     reiniciar = forcar_reinicio_login
     trocar = trocar_conta_pendente
-    # Limpa após leitura do robô para não repetir o mesmo comando
     codigo_okta_pendente = ""
     forcar_reinicio_login = False
     trocar_conta_pendente = ""
@@ -515,7 +573,8 @@ def obter_comando_okta():
 
 @app.post("/status_login_robo")
 async def atualizar_status_login_robo(request: Request):
-    global status_login_robo, conta_okta_ativa
+    global ultimo_heartbeat, status_login_robo, conta_okta_ativa
+    ultimo_heartbeat = datetime.datetime.now()
     dados = await request.json()
     status_login_robo = str(dados.get("status", "DESCONHECIDO"))
     if dados.get("conta"):
@@ -530,7 +589,8 @@ def ler_logs(ultimo_indice: int = 0):
         ultimo_indice = 0
         
     novos_logs = [log for log in logs_memoria if log["indice"] >= ultimo_indice]
-    robo_on = (datetime.datetime.now() - ultimo_heartbeat).total_seconds() < 25
+    # Tolerância de 60 segundos para evitar falsos "OFFLINE" durante gravações pesadas no banco
+    robo_on = (datetime.datetime.now() - ultimo_heartbeat).total_seconds() < 60
 
     return {
         "logs": novos_logs,
@@ -560,6 +620,7 @@ async def atualizar_cluster(request: Request):
             df.loc[df['id_rota'] == id_alvo, 'monitor'] = str(dados.get("monitor", "")).upper().strip()
             
         df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
+        invalidar_cache_rotas()
         return {"sucesso": True}
     except Exception as e: 
         invalidar_cache_rotas()
@@ -646,7 +707,7 @@ async def atualizar_cor(request: Request):
             str_cores = df.at[idx, 'cores_customizadas']
             try: 
                 dict_cores = json.loads(str_cores) if pd.notna(str_cores) and str_cores != "" else {}
-            except: 
+            except Exception: 
                 dict_cores = {}
             dict_cores[coluna] = cor
             df.at[idx, 'cores_customizadas'] = json.dumps(dict_cores)
@@ -671,5 +732,4 @@ def baixar_relatorio_pc(nome_arquivo: str):
             filename=nome_seguro,
             media_type='application/octet-stream'
         )
-    return {"sucesso": False, "erro": "Arquivo não encontrado no servidor."}  
-  
+    return {"sucesso": False, "erro": "Arquivo não encontrado no servidor."}

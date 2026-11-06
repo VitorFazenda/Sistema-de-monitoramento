@@ -876,7 +876,8 @@ const columnDefs = [
 ];
 
 const gridOptions = { 
-    columnDefs: columnDefs, rowData: [], enableCellChangeFlash: true, enableCellTextSelection: true, ensureDomOrder: true, alwaysMultiSort: false, 
+    theme: "legacy",
+    columnDefs: columnDefs, rowData: [], enableCellChangeFlash: true, enableCellTextSelection: true, ensureDomOrder: true, alwaysMultiSort: false,
     onModelUpdated: atualizarContadorRotas, onFilterChanged: atualizarContadorRotas, onRowDataUpdated: atualizarContadorRotas,
     onColumnResized: () => salvarEstadoColunas(), onColumnMoved: () => salvarEstadoColunas(), onColumnVisible: () => salvarEstadoColunas(), onColumnPinned: () => salvarEstadoColunas(),
     defaultColDef: { 
@@ -944,8 +945,9 @@ function popularDropdownsHubBI(hubs) {
     populate('filtro-hub-est', o, "TODOS");
 }
 function popularDropdownsDataBI(datas) {
+    const dataMaisRecente = datas.length > 0 ? datas[0] : "TODAS";
     const o = `<option value="TODAS">Todas as Datas</option><option value="PERIODO">📅 Selecionar Período...</option>` + datas.map(d => `<option value="${d}">${d}</option>`).join('');
-    populate('filtro-data-est', o, "TODAS");
+    populate('filtro-data-est', o, dataMaisRecente);
 }
 
 function aplicarFiltroHubPlanilha() {
@@ -958,28 +960,24 @@ function aplicarFiltroHubPlanilha() {
 }
 
 function limparFiltrosPlanilha() {
-    mostrarLoading("Limpando filtros da planilha...");
-    setTimeout(() => {
-        const selHub = document.getElementById('filtro-hub-planilha');
-        if (selHub) selHub.value = "TODOS";
+    const selHub = document.getElementById('filtro-hub-planilha');
+    if (selHub) selHub.value = "TODOS";
 
-        if (gridApi) {
-            gridApi.setFilterModel(null);
-            ['data', 'monitor', 'cluster', 'status', 'ocorrencia', 'revertido'].forEach(col => {
-                gridApi.getColumnFilterInstance(col).then(inst => {
-                    if (inst && typeof inst.setModel === 'function') {
-                        inst.setModel(null);
-                    }
-                }).catch(() => {});
-            });
-            document.querySelectorAll('#myGrid input[placeholder="Pesquisar..."], #myGrid .ag-floating-filter-input').forEach(inp => {
-                inp.value = '';
-            });
-            gridApi.onFilterChanged();
-        }
-        aplicarFiltroHubPlanilha();
-        esconderLoading();
-    }, 50);
+    if (gridApi) {
+        gridApi.setFilterModel(null);
+        ['data', 'monitor', 'cluster', 'status', 'ocorrencia', 'revertido'].forEach(col => {
+            gridApi.getColumnFilterInstance(col).then(inst => {
+                if (inst && typeof inst.setModel === 'function') {
+                    inst.setModel(null);
+                }
+            }).catch(() => {});
+        });
+        document.querySelectorAll('#myGrid input[placeholder="Pesquisar..."], #myGrid .ag-floating-filter-input').forEach(inp => {
+            inp.value = '';
+        });
+        gridApi.onFilterChanged();
+    }
+    aplicarFiltroHubPlanilha();
 }
 
 function filtrarBaseRelatorio(dId, hId, iniId, fimId, contId) {
@@ -1008,12 +1006,15 @@ function filtrarBaseRelatorio(dId, hId, iniId, fimId, contId) {
     return dF;
 }
 
+let estatisticasCalculadas = false;
+
 function aplicarFiltroUnificadoEstatisticas() {
     const baseFiltrada = filtrarBaseRelatorio('filtro-data-est', 'filtro-hub-est', 'data-ini-est', 'data-fim-est', 'container-periodo-est');
     gerarBI(baseFiltrada);
     limparFiltroMotivoOC();
     gerarOC(baseFiltrada);
     gerarGeralOperacao(baseFiltrada);
+    estatisticasCalculadas = true;
 }
 
 function aplicarFiltroHubBI() { aplicarFiltroUnificadoEstatisticas(); }
@@ -1047,7 +1048,6 @@ function carregarRotas(exibirToastRobo = false) {
                 popularDropdownsHubMonitoramento(extrairHubs(rotasGlobais, 'nome_rota'));
                 aplicarFiltroHubPlanilha();
                 inicializarEscala();
-                if (rotasBrutas.length > 0) aplicarFiltroUnificadoEstatisticas();
                 if (exibirToastRobo) mostrarToastRobo("Informações da planilha atualizadas pelo robô!");
             }
         })
@@ -1072,12 +1072,14 @@ function carregarRelatorios(exibirToastRobo = false) {
                 }
                 popularDropdownsHubBI(extrairHubs(rotasBrutas, 'Nome da Rota'));
                 popularDropdownsDataBI(extrairDatasBI(rotasBrutas));
+                estatisticasCalculadas = false;
                 
-                // Só processa imediatamente se a aba Estatísticas estiver aberta; senão processa quando o usuário entrar nela
                 const abaEstAtiva = document.getElementById('aba-estatisticas')?.classList.contains('ativo');
                 if (abaEstAtiva) {
                     aplicarFiltroUnificadoEstatisticas();
                 }
+                relatoriosJaCarregados = true;
+            } else {
                 relatoriosJaCarregados = true;
             }
             if (exibirToastRobo) mostrarToastRobo("Estatísticas e relatórios atualizados pelo robô!");
@@ -1268,9 +1270,7 @@ function iniciarSistemaAposLogin() {
 // CORE BI E MAPEAMENTO
 // ==========================================
 function normalizeBPObj(obj) {
-    const n = {};
-    for (const k in obj) { let key = k; try { key = decodeURIComponent(escape(k)); } catch(e) {} let val = obj[k]; if (typeof val === 'string') { try { val = decodeURIComponent(escape(val)); } catch(e) {} } n[key] = val; }
-    return n;
+    return obj || {};
 }
 
 function colMapBI(row) {
@@ -2364,24 +2364,36 @@ document.addEventListener('click', function(e) {
 });
 async function mudarAba(id, btn) {
     const minhaNavegacao = ++idNavegacaoAtiva;
-    esconderLoading(true);
-    mostrarLoading("Abrindo tela...");
 
-    // Troca o botão ativo e exibe a aba imediatamente para o menu responder na hora
     document.querySelectorAll('.conteudo-aba, .sidebar-btn').forEach(e => e.classList.remove('ativo'));
     document.getElementById(id).classList.add('ativo');
     if (btn) btn.classList.add('ativo');
 
-    // Dá fôlego para o navegador pintar o loading no centro da área branca e manter a sidebar livre
-    await new Promise(r => setTimeout(r, 60));
+    // Verifica se a aba selecionada precisa esperar download ou cálculo inicial
+    const precisaEsperarMonitoramento = (id === 'aba-monitoramento' && (!rotasJaCarregadas || carregandoRotasAgora));
+    const precisaEsperarEstatisticas = (id === 'aba-estatisticas' && (!relatoriosJaCarregados || carregandoRelatoriosAgora || (!estatisticasCalculadas && rotasBrutas.length > 0)));
+
+    if (!precisaEsperarMonitoramento && !precisaEsperarEstatisticas) {
+        esconderLoading(true);
+        if (id === 'aba-monitoramento' && gridApi) {
+            setTimeout(() => { restaurarEstadoColunas(); atualizarContadorRotas(); }, 20);
+        }
+        return;
+    }
+
+    esconderLoading(true);
+    mostrarLoading("Abrindo tela...");
+    const timeoutSeguranca = new Promise(r => setTimeout(r, 2500));
+
+    await new Promise(r => setTimeout(r, 30));
     if (minhaNavegacao !== idNavegacaoAtiva) return;
 
     try {
         if (id === 'aba-monitoramento') {
             if (carregandoRotasAgora && promessaRotas) {
-                await promessaRotas;
-            } else if (!rotasJaCarregadas || rotasGlobais.length === 0) {
-                await carregarRotas(false);
+                await Promise.race([promessaRotas, timeoutSeguranca]);
+            } else if (!rotasJaCarregadas) {
+                await Promise.race([carregarRotas(false), timeoutSeguranca]);
             }
             if (minhaNavegacao !== idNavegacaoAtiva) return;
             if (gridApi) {
@@ -2390,30 +2402,22 @@ async function mudarAba(id, btn) {
             }
         } else if (id === 'aba-estatisticas') {
             if (carregandoRelatoriosAgora && promessaRelatorios) {
-                await promessaRelatorios;
-            } else if (!relatoriosJaCarregados || rotasBrutas.length === 0) {
-                await carregarRelatorios(false);
+                await Promise.race([promessaRelatorios, timeoutSeguranca]);
+            } else if (!relatoriosJaCarregados) {
+                await Promise.race([carregarRelatorios(false), timeoutSeguranca]);
             }
             if (minhaNavegacao !== idNavegacaoAtiva) return;
-            if (BI_DATA.raw.length === 0 && rotasBrutas.length > 0) {
-                await new Promise(r => setTimeout(r, 50));
-                if (minhaNavegacao !== idNavegacaoAtiva) return;
+            if (!estatisticasCalculadas && rotasBrutas.length > 0) {
                 aplicarFiltroUnificadoEstatisticas();
             }
         }
     } catch (e) {
         console.error(e);
+    } finally {
+        if (minhaNavegacao === idNavegacaoAtiva) {
+            esconderLoading(true);
+        }
     }
-
-    if (minhaNavegacao !== idNavegacaoAtiva) return;
-
-    requestAnimationFrame(() => {
-        setTimeout(() => {
-            if (minhaNavegacao === idNavegacaoAtiva) {
-                esconderLoading(true);
-            }
-        }, 150);
-    });
 }
 
 function navegarPelosCards(idAba, idBotaoSidebar) {
@@ -2426,28 +2430,14 @@ function navegarPelosCards(idAba, idBotaoSidebar) {
 }
 
 function mudarSubAba(id, btn) {
-    const minhaNavegacao = ++idNavegacaoAtiva;
-    esconderLoading(true);
-    mostrarLoading("Abrindo tela...");
-    setTimeout(() => {
-        if (minhaNavegacao !== idNavegacaoAtiva) return;
-        const aP = btn ? btn.closest('.conteudo-aba') : null;
-        if (aP) {
-            aP.querySelectorAll('.sub-conteudo, .sub-tab-btn').forEach(e => e.classList.remove('ativo'));
-        } else {
-            document.querySelectorAll('.sub-conteudo, .sub-tab-btn').forEach(e => e.classList.remove('ativo'));
-        }
-        document.getElementById(id).classList.add('ativo');
-        if (btn) btn.classList.add('ativo');
-
-        requestAnimationFrame(() => {
-            setTimeout(() => {
-                if (minhaNavegacao === idNavegacaoAtiva) {
-                    esconderLoading(true);
-                }
-            }, 150);
-        });
-    }, 60);
+    const aP = btn ? btn.closest('.conteudo-aba') : null;
+    if (aP) {
+        aP.querySelectorAll('.sub-conteudo, .sub-tab-btn').forEach(e => e.classList.remove('ativo'));
+    } else {
+        document.querySelectorAll('.sub-conteudo, .sub-tab-btn').forEach(e => e.classList.remove('ativo'));
+    }
+    document.getElementById(id).classList.add('ativo');
+    if (btn) btn.classList.add('ativo');
 }
 function toggleMenu(){ document.getElementById('sidebar').classList.toggle('aberta'); document.getElementById('main-content').classList.toggle('empurrado'); }
 function abrirModalExportacao(){ const lc = document.getElementById('colunas-export-list'); lc.innerHTML = ''; gridApi.getColumns().forEach(c => { let l = document.createElement('label'); l.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; cursor:pointer; color:#334155;'; l.innerHTML = `<input type="checkbox" value="${c.getColId()}" checked style="width:16px; height:16px; accent-color:#1a237e;"> ${c.getColDef().headerName}`; lc.appendChild(l); }); document.getElementById('exportModal').classList.add('show'); }
@@ -2596,11 +2586,21 @@ function calcularEstadoPrioridadeTicket(t, idxOriginal) {
     };
 }
 
-function carregarTickets(){ 
-    fetch(`${API_BASE_URL}/tickets`).then(r=>r.json()).then(d=>{ 
-        ticketsAtivos = d || [];
-        renderizarFilaTickets();
-    }); 
+let buscandoTicketsAgora = false;
+
+function carregarTickets() {
+    if (buscandoTicketsAgora) return;
+    buscandoTicketsAgora = true;
+    fetch(`${API_BASE_URL}/tickets`)
+        .then(r => r.json())
+        .then(d => {
+            ticketsAtivos = Array.isArray(d) ? d : [];
+            renderizarFilaTickets();
+        })
+        .catch(() => {})
+        .finally(() => {
+            buscandoTicketsAgora = false;
+        });
 }
 
 function formatarDataHoraBR(dataStr) {

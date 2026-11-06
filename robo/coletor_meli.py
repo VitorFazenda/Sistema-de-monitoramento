@@ -6,6 +6,7 @@ import datetime
 import threading
 import shutil
 import requests
+import gc
 import pandas as pd
 from playwright.sync_api import sync_playwright
 from sqlalchemy import create_engine, text, inspect
@@ -71,7 +72,7 @@ if not DB_URL:
     print("❌ Erro Crítico: DATABASE_URL não encontrada. Verifique o seu ficheiro .env!")
     exit()
 
-motor_db = create_engine(DB_URL)
+motor_db = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=300)
 DIAS_SEMANA = ["Segunda", "Terca", "Quarta", "Quinta", "Sexta", "Sabado", "Domingo"]
 
 def log_painel(mensagem):
@@ -172,10 +173,10 @@ def avaliar_se_deve_rodar(ticket):
 def daemon_heartbeat():
     while True:
         try:
-            requests.get(f"{API_URL}/heartbeat", timeout=2)
+            requests.get(f"{API_URL}/heartbeat", timeout=10)
         except Exception:
             pass
-        time.sleep(3)
+        time.sleep(4)
 
 # ==========================================
 # MÓDULO DE LOGIN AUTOMATIZADO (MULTI-CONTA + AUTO-RELOAD 5 MIN)
@@ -841,47 +842,40 @@ def executar_relatorio(page, lista_hubs, ticket):
                 
                 insp = inspect(motor_db)
                 df.columns = df.columns.str.strip()
+                qtd_linhas = len(df)
                 
                 if insp.has_table('rotas_brutas'):
                     try:
-                        df_antigo_bruto = pd.read_sql_table('rotas_brutas', con=motor_db)
-                        if 'data_extracao' in df_antigo_bruto.columns:
-                            df_antigo_bruto.drop(columns=['data_extracao'], inplace=True)
-                            
-                        df_antigo_bruto.columns = df_antigo_bruto.columns.str.strip()
-                        
-                        if 'ID do Rota' in df.columns and 'ID do Rota' in df_antigo_bruto.columns:
-                            ids_rotas_novas = set(df['ID do Rota'].astype(str).str.strip())
-                            df_antigo_preservado = df_antigo_bruto[~df_antigo_bruto['ID do Rota'].astype(str).str.strip().isin(ids_rotas_novas)]
-                            df_combinado = pd.concat([df_antigo_preservado, df], ignore_index=True)
-                        else:
-                            df_combinado = df
-                            
-                        df_combinado.to_sql('rotas_brutas', con=motor_db, if_exists='replace', index=False)
-                        log_painel(f"✅ Relatório sincronizado ({len(df)} linhas processadas).")
-                    except Exception as e:
-                        log_painel(f"⚠️ Aviso: Conflito ao mesclar histórico ({e}). Substituindo tabela pela extração atual.")
-                        df.to_sql('rotas_brutas', con=motor_db, if_exists='replace', index=False)
-                else:
-                    df.to_sql('rotas_brutas', con=motor_db, if_exists='replace', index=False)
-                
-                df_hist = df.copy()
-                df_hist['data_extracao'] = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
-                
-                if insp.has_table('relatorios_historico'):
-                    colunas_banco = [c['name'] for c in insp.get_columns('relatorios_historico')]
-                    colunas_novas = [c for c in df_hist.columns if c not in colunas_banco]
-                    
-                    if colunas_novas:
-                        try:
+                        colunas_existentes = [c['name'] for c in insp.get_columns('rotas_brutas')]
+                        novas_cols = [c for c in df.columns if c not in colunas_existentes]
+                        if novas_cols:
                             with motor_db.begin() as conn:
-                                for c in colunas_novas:
-                                    conn.execute(text(f'ALTER TABLE relatorios_historico ADD COLUMN "{c}" TEXT;'))
-                            log_painel(f"🔄 Estrutura do histórico atualizada com {len(colunas_novas)} nova(s) coluna(s).")
-                        except Exception as e_alter:
-                            log_painel(f"⚠️ Aviso ao adaptar colunas do histórico: {e_alter}")
+                                for c in novas_cols:
+                                    conn.execute(text(f'ALTER TABLE rotas_brutas ADD COLUMN "{c}" TEXT;'))
+
+                        if 'ID do Rota' in df.columns and 'ID do Rota' in colunas_existentes:
+                            ids_novos = [str(x).strip() for x in df['ID do Rota'].dropna().unique().tolist() if str(x).strip()]
+                            # Remove apenas as rotas atualizadas direto no PostgreSQL sem carregar a tabela inteira na RAM!
+                            with motor_db.begin() as conn:
+                                for i in range(0, len(ids_novos), 500):
+                                    lote = ids_novos[i:i+500]
+                                    params = {f"id_{j}": val for j, val in enumerate(lote)}
+                                    placeholders = ", ".join([f":id_{j}" for j in range(len(lote))])
+                                    conn.execute(text(f'DELETE FROM rotas_brutas WHERE TRIM(CAST("ID do Rota" AS TEXT)) IN ({placeholders})'), params)
+                            
+                            df.to_sql('rotas_brutas', con=motor_db, if_exists='append', index=False, chunksize=1000)
+                        else:
+                            df.to_sql('rotas_brutas', con=motor_db, if_exists='replace', index=False, chunksize=1000)
+                            
+                        log_painel(f"✅ Relatório sincronizado ({qtd_linhas} linhas processadas com baixo uso de RAM).")
+                    except Exception as e:
+                        log_painel(f"⚠️ Aviso ao mesclar via SQL ({e}). Atualizando tabela...")
+                        df.to_sql('rotas_brutas', con=motor_db, if_exists='replace', index=False, chunksize=1000)
+                else:
+                    df.to_sql('rotas_brutas', con=motor_db, if_exists='replace', index=False, chunksize=1000)
                 
-                df_hist.to_sql('relatorios_historico', con=motor_db, if_exists='append', index=False)
+                del df
+                gc.collect()
             except Exception as e:
                 log_painel(f"⚠️ Erro ao processar arquivo no DB: {e}")
                 
@@ -953,7 +947,9 @@ def iniciar_orquestrador():
                 page = navegador.pages[0] if navegador.pages else navegador.new_page()
                 estado_anterior = ""
                 tarefas_desde_ultimo_reset = 0
-                
+                page.set_default_timeout(30000)
+                page.set_default_navigation_timeout(60000)
+
                 garantir_login(page, forcar_recarregamento=True)
                 
                 while True:
@@ -1042,12 +1038,13 @@ def iniciar_orquestrador():
                                 log_painel(f"❌ Erro crítico ao processar ticket: {e}")
                                 
                         if not ticket_processado:
-                            # Se já executou 12 tarefas seguidas e agora a fila está em espera, recicla a memória RAM do Chromium!
-                            if tarefas_desde_ultimo_reset >= 12:
+                            # Recicla o Chromium a cada 6 tarefas concluídas para manter a memória RAM sempre livre!
+                            if tarefas_desde_ultimo_reset >= 6:
                                 try:
                                     navegador.close()
                                 except Exception:
                                     pass
+                                gc.collect()
                                 break
 
                             if estado_anterior != "dormindo":
