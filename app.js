@@ -1093,42 +1093,6 @@ function carregarRotas(exibirToastRobo = false) {
 
 function carregarRelatorios(exibirToastRobo = false) {
     carregandoRelatoriosAgora = true;
-    if (!relatoriosJaCarregados) controlarLoadingInfoAba('estatisticas', true);
-
-    promessaRelatorios = fetch(`${API_BASE_URL}/rotas_brutas`)
-        .then(r => r.json())
-        .then(d => {
-            if (Array.isArray(d) && d.length > 0) {
-                if (currentUser.hubs !== "TODOS") {
-                    const mh = currentUser.hubs.toUpperCase().split(',').map(h => h.trim());
-                    rotasBrutas = d.filter(r => mh.some(h => String(r["Nome da Rota"] || "").toUpperCase().includes(h)));
-                } else {
-                    rotasBrutas = d;
-                }
-                popularDropdownsHubBI(extrairHubs(rotasBrutas, 'Nome da Rota'));
-                popularDropdownsDataBI(extrairDatasBI(rotasBrutas));
-                estatisticasCalculadas = false;
-                
-                const abaEstAtiva = document.getElementById('aba-estatisticas')?.classList.contains('ativo');
-                if (abaEstAtiva) {
-                    aplicarFiltroUnificadoEstatisticas();
-                }
-                relatoriosJaCarregados = true;
-            } else {
-                relatoriosJaCarregados = true;
-            }
-            if (exibirToastRobo) mostrarToastRobo("Estatísticas e relatórios atualizados pelo robô!");
-        })
-        .catch(e => console.error(e))
-        .finally(() => {
-            carregandoRelatoriosAgora = false;
-            controlarLoadingInfoAba('estatisticas', false);
-        });
-    return promessaRelatorios;
-}
-
-function carregarRelatorios(exibirToastRobo = false) {
-    carregandoRelatoriosAgora = true;
     promessaRelatorios = fetch(`${API_BASE_URL}/rotas_brutas`)
         .then(r => r.json())
         .then(d => {
@@ -1306,7 +1270,7 @@ function iniciarSistemaAposLogin() {
                         d.logs.forEach(l => {
                             tm.innerHTML += `<span style="color: #31D086;">[${l.hora}] [MOTOR]</span> <span style="color: #e2e8f0;">${l.msg}</span><br>`;
                             if (l.msg.includes("PROCESSO CONCLUÍDO") || l.msg.includes("MONITORAMENTO CONCLUÍDO")) aP = true;
-                            if (l.msg.includes("RELATÓRIO BAIXADO")) aB = true;
+                            if (l.msg.includes("RELATÓRIO BAIXADO") || l.msg.includes("EXTRAÇÃO DE RELATÓRIO CONCLUÍDA")) aB = true;
 
                             // Se o robô gerou um arquivo para baixar no PC, dispara o download automático!
                             const matchDown = l.msg.match(/\[DOWNLOAD_PC:([^\]]+)\]/);
@@ -2466,57 +2430,6 @@ async function mudarAba(id, btn) {
                 aplicarFiltroUnificadoEstatisticas();
             }
             controlarLoadingInfoAba('estatisticas', false);
-        }
-    }
-}
-
-    // Verifica se a aba selecionada precisa esperar download ou cálculo inicial
-    const precisaEsperarMonitoramento = (id === 'aba-monitoramento' && (!rotasJaCarregadas || carregandoRotasAgora));
-    const precisaEsperarEstatisticas = (id === 'aba-estatisticas' && (!relatoriosJaCarregados || carregandoRelatoriosAgora || (!estatisticasCalculadas && rotasBrutas.length > 0)));
-
-    if (!precisaEsperarMonitoramento && !precisaEsperarEstatisticas) {
-        esconderLoading(true);
-        if (id === 'aba-monitoramento' && gridApi) {
-            setTimeout(() => { restaurarEstadoColunas(); atualizarContadorRotas(); }, 20);
-        }
-        return;
-    }
-
-    esconderLoading(true);
-    mostrarLoading("Abrindo tela...");
-    const timeoutSeguranca = new Promise(r => setTimeout(r, 2500));
-
-    await new Promise(r => setTimeout(r, 30));
-    if (minhaNavegacao !== idNavegacaoAtiva) return;
-
-    try {
-        if (id === 'aba-monitoramento') {
-            if (carregandoRotasAgora && promessaRotas) {
-                await Promise.race([promessaRotas, timeoutSeguranca]);
-            } else if (!rotasJaCarregadas) {
-                await Promise.race([carregarRotas(false), timeoutSeguranca]);
-            }
-            if (minhaNavegacao !== idNavegacaoAtiva) return;
-            if (gridApi) {
-                restaurarEstadoColunas();
-                atualizarContadorRotas();
-            }
-        } else if (id === 'aba-estatisticas') {
-            if (carregandoRelatoriosAgora && promessaRelatorios) {
-                await Promise.race([promessaRelatorios, timeoutSeguranca]);
-            } else if (!relatoriosJaCarregados) {
-                await Promise.race([carregarRelatorios(false), timeoutSeguranca]);
-            }
-            if (minhaNavegacao !== idNavegacaoAtiva) return;
-            if (!estatisticasCalculadas && rotasBrutas.length > 0) {
-                aplicarFiltroUnificadoEstatisticas();
-            }
-        }
-    } catch (e) {
-        console.error(e);
-    } finally {
-        if (minhaNavegacao === idNavegacaoAtiva) {
-            esconderLoading(true);
         }
     }
 }
