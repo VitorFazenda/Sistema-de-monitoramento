@@ -67,6 +67,17 @@ function esconderLoading(forcar = false) {
     }
 }
 
+function controlarLoadingInfoAba(aba, mostrar) {
+    const idEl = aba === 'monitoramento' ? 'loading-info-monitoramento' : 'loading-info-estatisticas';
+    const el = document.getElementById(idEl);
+    if (!el) return;
+    if (mostrar) {
+        el.classList.add('show');
+    } else {
+        el.classList.remove('show');
+    }
+}
+
 function mostrarToastRobo(mensagem = "Informações atualizadas pelo robô!") {
     const toast = document.getElementById('toast-robo');
     const msgEl = document.getElementById('toast-robo-msg');
@@ -463,7 +474,8 @@ function buscarMonitorDoCluster(clusterAlvo, dataRota, nomeRota) {
 
 function ordenarRotasPorSequencia(lista) {
     return lista.slice().sort((a, b) => {
-        const dtA = String(a.data || ""), dtB = String(b.data || ""); if (dtA !== dtB) return dtB.localeCompare(dtA);
+        const cmpData = comparadorDataBR(b.data, a.data);
+        if (cmpData !== 0) return cmpData;
         const cA = String(a.cluster || "").toUpperCase().trim(), cB = String(b.cluster || "").toUpperCase().trim();
         const sA = (!cA || cA === "SEM CLUSTER"), sB = (!cB || cB === "SEM CLUSTER");
         if (sA && !sB) return 1; if (!sA && sB) return -1;
@@ -706,9 +718,27 @@ class ExcelStyleFilter {
         this.onRowDataUpdated = () => this.refreshData(); this.p.api.addEventListener('rowDataUpdated', this.onRowDataUpdated);
     }
     refreshData() {
-        let cVals = new Set(); this.p.api.forEachLeafNode(n => { if (n.data) { let v = n.data[this.p.colDef.field]; cVals.add(v == null ? "" : v); } });
-        let nArr = Array.from(cVals).sort();
-        if (JSON.stringify(nArr) !== JSON.stringify(this.vArr)) { nArr.forEach(v => { if (!this.vArr.includes(v)) this.sVals.add(v); }); this.vArr = nArr; this.renderCheckboxes(); }
+        let cVals = new Set();
+        this.p.api.forEachLeafNode(n => {
+            if (n.data) {
+                let v = n.data[this.p.colDef.field];
+                cVals.add(v == null ? "" : v);
+            }
+        });
+        const campo = this.p.colDef.field;
+        let nArr = Array.from(cVals).sort((a, b) => {
+            if (a === "") return 1;
+            if (b === "") return -1;
+            if (campo === 'data') {
+                return comparadorDataBR(a, b);
+            }
+            return comparadorTextoNatural(a, b);
+        });
+        if (JSON.stringify(nArr) !== JSON.stringify(this.vArr)) {
+            nArr.forEach(v => { if (!this.vArr.includes(v)) this.sVals.add(v); });
+            this.vArr = nArr;
+            this.renderCheckboxes();
+        }
     }
     renderCheckboxes() {
         this.lCont.innerHTML = ''; this.cbs = []; let ts = (this.lastSearchText || "").toLowerCase();
@@ -1025,6 +1055,8 @@ let promessaRelatorios = null;
 
 function carregarRotas(exibirToastRobo = false) {
     carregandoRotasAgora = true;
+    if (!rotasJaCarregadas) controlarLoadingInfoAba('monitoramento', true);
+
     promessaRotas = fetch(`${API_BASE_URL}/rotas`)
         .then(r => r.json())
         .then(d => {
@@ -1054,8 +1086,45 @@ function carregarRotas(exibirToastRobo = false) {
         .catch(e => console.error(e))
         .finally(() => {
             carregandoRotasAgora = false;
+            controlarLoadingInfoAba('monitoramento', false);
         });
     return promessaRotas;
+}
+
+function carregarRelatorios(exibirToastRobo = false) {
+    carregandoRelatoriosAgora = true;
+    if (!relatoriosJaCarregados) controlarLoadingInfoAba('estatisticas', true);
+
+    promessaRelatorios = fetch(`${API_BASE_URL}/rotas_brutas`)
+        .then(r => r.json())
+        .then(d => {
+            if (Array.isArray(d) && d.length > 0) {
+                if (currentUser.hubs !== "TODOS") {
+                    const mh = currentUser.hubs.toUpperCase().split(',').map(h => h.trim());
+                    rotasBrutas = d.filter(r => mh.some(h => String(r["Nome da Rota"] || "").toUpperCase().includes(h)));
+                } else {
+                    rotasBrutas = d;
+                }
+                popularDropdownsHubBI(extrairHubs(rotasBrutas, 'Nome da Rota'));
+                popularDropdownsDataBI(extrairDatasBI(rotasBrutas));
+                estatisticasCalculadas = false;
+                
+                const abaEstAtiva = document.getElementById('aba-estatisticas')?.classList.contains('ativo');
+                if (abaEstAtiva) {
+                    aplicarFiltroUnificadoEstatisticas();
+                }
+                relatoriosJaCarregados = true;
+            } else {
+                relatoriosJaCarregados = true;
+            }
+            if (exibirToastRobo) mostrarToastRobo("Estatísticas e relatórios atualizados pelo robô!");
+        })
+        .catch(e => console.error(e))
+        .finally(() => {
+            carregandoRelatoriosAgora = false;
+            controlarLoadingInfoAba('estatisticas', false);
+        });
+    return promessaRelatorios;
 }
 
 function carregarRelatorios(exibirToastRobo = false) {
@@ -2368,6 +2437,38 @@ async function mudarAba(id, btn) {
     document.querySelectorAll('.conteudo-aba, .sidebar-btn').forEach(e => e.classList.remove('ativo'));
     document.getElementById(id).classList.add('ativo');
     if (btn) btn.classList.add('ativo');
+
+    esconderLoading(true);
+
+    if (id === 'aba-monitoramento') {
+        if (carregandoRotasAgora || !rotasJaCarregadas) {
+            controlarLoadingInfoAba('monitoramento', true);
+            if (!carregandoRotasAgora && !rotasJaCarregadas) {
+                await carregarRotas(false);
+            } else if (promessaRotas) {
+                await promessaRotas;
+            }
+            controlarLoadingInfoAba('monitoramento', false);
+        }
+        if (gridApi) {
+            setTimeout(() => { restaurarEstadoColunas(); atualizarContadorRotas(); }, 20);
+        }
+    } else if (id === 'aba-estatisticas') {
+        if (carregandoRelatoriosAgora || !relatoriosJaCarregados || (!estatisticasCalculadas && rotasBrutas.length > 0)) {
+            controlarLoadingInfoAba('estatisticas', true);
+            await new Promise(r => setTimeout(r, 40));
+            if (!carregandoRelatoriosAgora && !relatoriosJaCarregados) {
+                await carregarRelatorios(false);
+            } else if (carregandoRelatoriosAgora && promessaRelatorios) {
+                await promessaRelatorios;
+            }
+            if (minhaNavegacao === idNavegacaoAtiva && !estatisticasCalculadas && rotasBrutas.length > 0) {
+                aplicarFiltroUnificadoEstatisticas();
+            }
+            controlarLoadingInfoAba('estatisticas', false);
+        }
+    }
+}
 
     // Verifica se a aba selecionada precisa esperar download ou cálculo inicial
     const precisaEsperarMonitoramento = (id === 'aba-monitoramento' && (!rotasJaCarregadas || carregandoRotasAgora));

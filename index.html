@@ -132,7 +132,13 @@
         </div>
 
         <!-- ================= MONITORAMENTO (GRID E ESCALA) ================= -->
-        <div id="aba-monitoramento" class="conteudo-aba">
+        <div id="aba-monitoramento" class="conteudo-aba" style="position: relative;">
+            <div id="loading-info-monitoramento" class="inline-loading-overlay">
+                <div class="loading-box">
+                    <div class="spinner-bolinha"></div>
+                    <div class="loading-text">Carregando informações...</div>
+                </div>
+            </div>
             <div class="sub-navbar">
                 <div class="sub-navbar-tabs">
                     <button class="sub-tab-btn ativo" onclick="mudarSubAba('sub-planilha', this)">Planilha de Rotas</button>
@@ -226,8 +232,14 @@
             </div>
         </div>
 
-        <!-- ================= ESTATÍSTICAS (BARRA UNIFICADA + 3 SUB-ABAS) ================= -->
-        <div id="aba-estatisticas" class="conteudo-aba">
+        <!-- ================= ESTATÍSTICAS ================= -->
+        <div id="aba-estatisticas" class="conteudo-aba" style="position: relative;">
+            <div id="loading-info-estatisticas" class="inline-loading-overlay">
+                <div class="loading-box">
+                    <div class="spinner-bolinha"></div>
+                    <div class="loading-text">Carregando informações...</div>
+                </div>
+            </div>
             <div class="sub-navbar sub-navbar-estatisticas">
                 <!-- Abas na Esquerda -->
                 <div class="sub-navbar-tabs">

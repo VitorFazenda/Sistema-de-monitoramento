@@ -734,3 +734,23 @@ html, body { height: 100%; margin: 0; padding: 0; font-family: 'Segoe UI', Tahom
 .go-pivot-table tr.row-revertido-parcial td {
     background: #fff7ed;
 }
+
+/* ========================================== */
+/* CARREGANDO INFORMAÇÕES (APENAS ÁREA VAZIA) */
+/* ========================================== */
+.inline-loading-overlay {
+    display: none;
+    position: absolute;
+    top: 145px;
+    left: 0;
+    width: 100%;
+    height: calc(100% - 145px);
+    background: rgba(238, 241, 247, 0.75);
+    z-index: 600;
+    justify-content: center;
+    align-items: center;
+    pointer-events: none;
+}
+.inline-loading-overlay.show {
+    display: flex;
+}
