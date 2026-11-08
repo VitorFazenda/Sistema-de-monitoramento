@@ -1271,42 +1271,79 @@ function carregarRelatorios(exibirToastRobo = false) {
 }
 
 let contaOktaAtual = "Vitor.Martins";
+let statusSessaoOktaAtual = "DESCONHECIDO";
+let roboOnlineAtual = false;
+let inicioSessaoOktaMs = null;
 
-function atualizarBadgeSessaoOkta(statusLogin, roboOnline, contaServidor) {
+function formatarDuracaoSessao(msInicio) {
+    if (!msInicio) return "00:00:00";
+    const totalSeg = Math.max(0, Math.floor((Date.now() - msInicio) / 1000));
+    const dias = Math.floor(totalSeg / 86400);
+    const horas = Math.floor((totalSeg % 86400) / 3600);
+    const minutos = Math.floor((totalSeg % 3600) / 60);
+    const segundos = totalSeg % 60;
+    const hms = `${String(horas).padStart(2, '0')}:${String(minutos).padStart(2, '0')}:${String(segundos).padStart(2, '0')}`;
+    return dias > 0 ? `${dias}d ${hms}` : hms;
+}
+
+function renderizarTextoBadgeSessaoOkta() {
+    const badge = document.getElementById('badge-status-sessao-okta');
+    if (!badge) return;
+
+    if (!roboOnlineAtual || statusSessaoOktaAtual === 'OFFLINE') {
+        badge.style.background = '#7f1d1d';
+        badge.style.color = '#fca5a5';
+        badge.innerText = '🔴 ROBÔ OFFLINE';
+    } else if (statusSessaoOktaAtual === 'AGUARDANDO_OKTA') {
+        badge.style.background = '#f59e0b';
+        badge.style.color = '#0f172a';
+        badge.innerText = `📲 AGUARDANDO OKTA (${contaOktaAtual})`;
+    } else if (statusSessaoOktaAtual === 'LOGADO') {
+        badge.style.background = '#10b981';
+        badge.style.color = '#052e16';
+        const cronometroStr = formatarDuracaoSessao(inicioSessaoOktaMs);
+        badge.innerHTML = `🟢 SESSÃO ATIVA (${contaOktaAtual}) <span style="margin-left:6px; padding-left:7px; border-left:1px solid rgba(5,46,22,0.3); font-family:monospace; font-size:11.5px; font-weight:900;">⏱️ ${cronometroStr}</span>`;
+    } else {
+        badge.style.background = '#334155';
+        badge.style.color = '#cbd5e1';
+        badge.innerText = '⏳ A VERIFICAR SESSÃO...';
+    }
+}
+
+function atualizarBadgeSessaoOkta(statusLogin, roboOnline, contaServidor, tempoSessaoSeg) {
     if (contaServidor) contaOktaAtual = contaServidor;
+    statusSessaoOktaAtual = statusLogin || 'DESCONHECIDO';
+    roboOnlineAtual = !!roboOnline;
 
     const selectConta = document.getElementById('select-conta-okta');
     if (selectConta) {
         if (contaServidor && document.activeElement !== selectConta) {
             selectConta.value = contaServidor;
         }
-        // Só permite trocar o login quando estiver no processo de login e validação do Okta!
         const podeTrocarLogin = (roboOnline && statusLogin === 'AGUARDANDO_OKTA');
         selectConta.disabled = !podeTrocarLogin;
         selectConta.style.opacity = podeTrocarLogin ? '1' : '0.55';
         selectConta.style.cursor = podeTrocarLogin ? 'pointer' : 'not-allowed';
     }
 
-    gerenciarAlertaCaixaMensagens(statusLogin, roboOnline);
-    const badge = document.getElementById('badge-status-sessao-okta');
-    if (!badge) return;
-    if (!roboOnline || statusLogin === 'OFFLINE') {
-        badge.style.background = '#7f1d1d';
-        badge.style.color = '#fca5a5';
-        badge.innerText = '🔴 ROBÔ OFFLINE';
-    } else if (statusLogin === 'AGUARDANDO_OKTA') {
-        badge.style.background = '#f59e0b';
-        badge.style.color = '#0f172a';
-        badge.innerText = `📲 AGUARDANDO OKTA (${contaOktaAtual})`;
-    } else if (statusLogin === 'LOGADO') {
-        badge.style.background = '#10b981';
-        badge.style.color = '#052e16';
-        badge.innerText = `🟢 SESSÃO ATIVA (${contaOktaAtual})`;
+    if (roboOnline && statusLogin === 'LOGADO') {
+        if (typeof tempoSessaoSeg === 'number' && tempoSessaoSeg > 0) {
+            inicioSessaoOktaMs = Date.now() - (tempoSessaoSeg * 1000);
+            localStorage.setItem('inicioSessaoOktaMs', String(inicioSessaoOktaMs));
+        } else if (!inicioSessaoOktaMs) {
+            const salvo = parseInt(localStorage.getItem('inicioSessaoOktaMs') || '0', 10);
+            inicioSessaoOktaMs = (salvo > 0 && salvo <= Date.now()) ? salvo : Date.now();
+            localStorage.setItem('inicioSessaoOktaMs', String(inicioSessaoOktaMs));
+        }
     } else {
-        badge.style.background = '#334155';
-        badge.style.color = '#cbd5e1';
-        badge.innerText = '⏳ A VERIFICAR SESSÃO...';
+        inicioSessaoOktaMs = null;
+        if (statusLogin === 'AGUARDANDO_OKTA') {
+            localStorage.removeItem('inicioSessaoOktaMs');
+        }
     }
+
+    gerenciarAlertaCaixaMensagens(statusLogin, roboOnline);
+    renderizarTextoBadgeSessaoOkta();
 }
 
 function trocarContaOktaPainel(novaConta) {
@@ -1318,6 +1355,8 @@ function trocarContaOktaPainel(novaConta) {
     }).then(r => r.json()).then(res => {
         if (res.sucesso) {
             contaOktaAtual = novaConta;
+            inicioSessaoOktaMs = null;
+            localStorage.removeItem('inicioSessaoOktaMs');
             mostrarToastRobo(`👤 Alterando login para ${novaConta}...`);
         } else {
             alert(res.erro || "Não foi possível trocar a conta agora.");
@@ -1348,6 +1387,8 @@ function enviarCodigoOktaPainel() {
 }
 
 function reiniciarLoginRoboPainel() {
+    inicioSessaoOktaMs = null;
+    localStorage.removeItem('inicioSessaoOktaMs');
     fetch(`${API_BASE_URL}/reiniciar_login_robo`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
@@ -1370,20 +1411,23 @@ function iniciarSistemaAposLogin() {
         document.getElementById('label-data-hoje').innerText = dH.split('-').reverse().join('/');
     }
     
-    // 1º Prioridade máxima: carrega a fila do Robô e as Rotas imediatamente
     carregarTickets();
     carregarCoresCustomizadas();
     carregarMetas();
     carregarEdicoesOcorrencias();
     carregarRotas(false);
 
-    // 2º Carrega a base pesada de Estatísticas 1,5s depois para não competir com a aba do Robô
     setTimeout(() => {
         carregarRelatorios(false);
     }, 1500);
     
     setInterval(carregarTickets, 5000);
-    setInterval(atualizarCountdowns, 1000);
+    setInterval(() => {
+        atualizarCountdowns();
+        if (roboOnlineAtual && statusSessaoOktaAtual === 'LOGADO') {
+            renderizarTextoBadgeSessaoOkta();
+        }
+    }, 1000);
 
     let buscandoLogs = false;
     setInterval(() => {
@@ -1407,7 +1451,7 @@ function iniciarSistemaAposLogin() {
                 if (ft) ft.style.color = d.robo_online ? "#31D086" : "#ef4444";
                 if (sh) sh.innerHTML = d.robo_online ? '<span style="color:#15803d;">🟢 Robô Online</span>' : '<span style="color:#b91c1c;">🔴 Robô Offline</span>';
 
-                atualizarBadgeSessaoOkta(d.status_login, d.robo_online, d.conta_okta);
+                atualizarBadgeSessaoOkta(d.status_login, d.robo_online, d.conta_okta, d.tempo_sessao_seg);
 
                 if (d.logs && d.logs.length > 0) {
                     let aP = false, aB = false;
@@ -1418,7 +1462,6 @@ function iniciarSistemaAposLogin() {
                             if (l.msg.includes("PROCESSO CONCLUÍDO") || l.msg.includes("MONITORAMENTO CONCLUÍDO")) aP = true;
                             if (l.msg.includes("RELATÓRIO BAIXADO") || l.msg.includes("EXTRAÇÃO DE RELATÓRIO CONCLUÍDA")) aB = true;
 
-                            // Se o robô gerou um arquivo para baixar no PC, dispara o download automático!
                             const matchDown = l.msg.match(/\[DOWNLOAD_PC:([^\]]+)\]/);
                             if (matchDown && matchDown[1]) {
                                 dispararDownloadRelatorioPC(matchDown[1]);
@@ -2998,7 +3041,6 @@ function fecharEdicaoTicket() {
         document.getElementById('config-hub').value = '';
     }
 
-    // Volta sempre para "Avulso (Executar Agora)" e recolhe a gaveta de rotina ao fechar o modal
     const selectTipo = document.getElementById('config-tipo');
     if (selectTipo) selectTipo.value = 'avulso';
 
@@ -3126,4 +3168,76 @@ function confirmarExclusaoTicket() {
             alert("Erro ao excluir o ticket no servidor.");
         });
 }
+
+// ==========================================
+// OTIMIZADOR DE FAVICON (CORRIGE LOGO ACHATADA NA ABA DO NAVEGADOR)
+// ==========================================
+function otimizarFaviconAba() {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.src = "logo.png";
+    img.onload = function() {
+        try {
+            const tempCanvas = document.createElement("canvas");
+            tempCanvas.width = img.width;
+            tempCanvas.height = img.height;
+            const tCtx = tempCanvas.getContext("2d");
+            tCtx.drawImage(img, 0, 0);
+
+            const imgData = tCtx.getImageData(0, 0, img.width, img.height).data;
+            let minX = img.width, minY = img.height, maxX = 0, maxY = 0;
+            let encontrouPixel = false;
+
+            for (let y = 0; y < img.height; y++) {
+                for (let x = 0; x < img.width; x++) {
+                    const alpha = imgData[(y * img.width + x) * 4 + 3];
+                    if (alpha > 25) {
+                        if (x < minX) minX = x;
+                        if (x > maxX) maxX = x;
+                        if (y < minY) minY = y;
+                        if (y > maxY) maxY = y;
+                        encontrouPixel = true;
+                    }
+                }
+            }
+
+            if (!encontrouPixel) {
+                minX = 0; minY = 0; maxX = img.width - 1; maxY = img.height - 1;
+            }
+
+            const cropW = Math.max(1, maxX - minX + 1);
+            const cropH = Math.max(1, maxY - minY + 1);
+
+            const size = 64;
+            const favCanvas = document.createElement("canvas");
+            favCanvas.width = size;
+            favCanvas.height = size;
+            const ctx = favCanvas.getContext("2d");
+
+            // Fundo circular azul-marinho (#1a237e) para destacar na aba escura ou clara
+            ctx.beginPath();
+            ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+            ctx.fillStyle = "#1a237e";
+            ctx.fill();
+
+            // Desenha a logo recortada mantendo proporção 1:1 (sem achatar)
+            const margem = 4;
+            const areaUtil = size - (margem * 2);
+            const escala = Math.min(areaUtil / cropW, areaUtil / cropH);
+            const drawW = cropW * escala;
+            const drawH = cropH * escala;
+            const offsetX = (size - drawW) / 2;
+            const offsetY = (size - drawH) / 2;
+
+            ctx.drawImage(img, minX, minY, cropW, cropH, offsetX, offsetY, drawW, drawH);
+
+            const dataUrl = favCanvas.toDataURL("image/png");
+            document.querySelectorAll("link[rel*='icon']").forEach(link => {
+                link.href = dataUrl;
+            });
+        } catch (e) {}
+    };
+}
+
+document.addEventListener("DOMContentLoaded", otimizarFaviconAba);
 

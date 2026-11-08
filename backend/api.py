@@ -627,121 +627,166 @@ forcar_reinicio_login = False
 trocar_conta_pendente = ""
 conta_okta_ativa = "Vitor.Martins"
 status_login_robo = "DESCONHECIDO"
+inicio_sessao_okta_ts = None
+
 
 def registrar_log_interno(msg: str):
-    global total_logs_recebidos
-    hora = datetime.datetime.now().strftime("%H:%M:%S")
-    logs_memoria.append({
-        "indice": total_logs_recebidos,
-        "hora": hora,
-        "msg": msg
-    })
-    total_logs_recebidos += 1
-    if len(logs_memoria) > 200:
-        logs_memoria.pop(0)
+  global total_logs_recebidos
+  hora = datetime.datetime.now().strftime("%H:%M:%S")
+  logs_memoria.append(
+      {"indice": total_logs_recebidos, "hora": hora, "msg": msg}
+  )
+  total_logs_recebidos += 1
+  if len(logs_memoria) > 200:
+    logs_memoria.pop(0)
+
 
 @app.get("/heartbeat")
 def ping_robo():
-    global ultimo_heartbeat
-    ultimo_heartbeat = datetime.datetime.now()
-    return {"sucesso": True}
+  global ultimo_heartbeat
+  ultimo_heartbeat = datetime.datetime.now()
+  return {"sucesso": True}
+
 
 @app.post("/enviar_log")
 async def receber_log(request: Request):
-    global ultimo_heartbeat
-    ultimo_heartbeat = datetime.datetime.now()
-    dados = await request.json()
-    msg = dados.get("mensagem", "")
-    registrar_log_interno(msg)
-    if "CONCLUÍDO" in msg or "atualizando planilha" in msg.lower():
-        invalidar_cache_rotas()
-        threading.Thread(target=construir_json_rotas, daemon=True).start()
-    if "RELATÓRIO BAIXADO" in msg or "Relatório sincronizado" in msg:
-        invalidar_cache_brutas()
-        threading.Thread(target=construir_json_rotas_brutas, daemon=True).start()
-    return {"sucesso": True}
+  global ultimo_heartbeat
+  ultimo_heartbeat = datetime.datetime.now()
+  dados = await request.json()
+  msg = dados.get("mensagem", "")
+  registrar_log_interno(msg)
+  if "CONCLUÍDO" in msg or "atualizando planilha" in msg.lower():
+    invalidar_cache_rotas()
+    threading.Thread(target=construir_json_rotas, daemon=True).start()
+  if "RELATÓRIO BAIXADO" in msg or "Relatório sincronizado" in msg:
+    invalidar_cache_brutas()
+    threading.Thread(target=construir_json_rotas_brutas, daemon=True).start()
+  return {"sucesso": True}
+
 
 @app.post("/enviar_codigo_okta")
 async def receber_codigo_okta(request: Request):
-    global codigo_okta_pendente
-    dados = await request.json()
-    cod = str(dados.get("codigo", "")).replace(" ", "").strip()
-    if not cod:
-        return {"sucesso": False, "erro": "Código vazio."}
-    codigo_okta_pendente = cod
-    registrar_log_interno(f"📲 [PAINEL WEB] Código Okta ({cod}) recebido para {conta_okta_ativa}! Enviando para o robô...")
-    return {"sucesso": True}
+  global codigo_okta_pendente
+  dados = await request.json()
+  cod = str(dados.get("codigo", "")).replace(" ", "").strip()
+  if not cod:
+    return {"sucesso": False, "erro": "Código vazio."}
+  codigo_okta_pendente = cod
+  registrar_log_interno(
+      f"📲 [PAINEL WEB] Código Okta ({cod}) recebido para {conta_okta_ativa}!"
+      " Enviando para o robô..."
+  )
+  return {"sucesso": True}
+
 
 @app.post("/selecionar_conta_okta")
 async def selecionar_conta_okta(request: Request):
-    global conta_okta_ativa, trocar_conta_pendente, codigo_okta_pendente, status_login_robo
-    dados = await request.json()
-    nova_conta = str(dados.get("conta", "")).strip()
-    if nova_conta not in ["Vitor.Martins", "Larissa.Campos"]:
-        return {"sucesso": False, "erro": "Conta inválida."}
-    if status_login_robo != "AGUARDANDO_OKTA":
-        return {"sucesso": False, "erro": "A troca de login só pode ser feita durante o processo de login e validação do Okta."}
-    
-    conta_okta_ativa = nova_conta
-    trocar_conta_pendente = nova_conta
-    codigo_okta_pendente = ""
-    registrar_log_interno(f"👤 [PAINEL WEB] Conta alterada para '{nova_conta}'. Ordenando ao robô voltar à tela de login...")
-    return {"sucesso": True, "conta": conta_okta_ativa}
+  global conta_okta_ativa, trocar_conta_pendente, codigo_okta_pendente, status_login_robo, inicio_sessao_okta_ts
+  dados = await request.json()
+  nova_conta = str(dados.get("conta", "")).strip()
+  if nova_conta not in ["Vitor.Martins", "Larissa.Campos"]:
+    return {"sucesso": False, "erro": "Conta inválida."}
+  if status_login_robo != "AGUARDANDO_OKTA":
+    return {
+        "sucesso": False,
+        "erro": (
+            "A troca de login só pode ser feita durante o processo de login e"
+            " validação do Okta."
+        ),
+    }
+
+  conta_okta_ativa = nova_conta
+  trocar_conta_pendente = nova_conta
+  codigo_okta_pendente = ""
+  inicio_sessao_okta_ts = None
+  registrar_log_interno(
+      f"👤 [PAINEL WEB] Conta alterada para '{nova_conta}'. Ordenando ao robô"
+      " voltar à tela de login..."
+  )
+  return {"sucesso": True, "conta": conta_okta_ativa}
+
 
 @app.post("/reiniciar_login_robo")
 async def solicitar_reinicio_login():
-    global forcar_reinicio_login, codigo_okta_pendente
-    forcar_reinicio_login = True
-    codigo_okta_pendente = ""
-    registrar_log_interno("🔄 [PAINEL WEB] Ordem de recarregar site e reiniciar login Okta enviada ao robô!")
-    return {"sucesso": True}
+  global forcar_reinicio_login, codigo_okta_pendente, inicio_sessao_okta_ts
+  forcar_reinicio_login = True
+  codigo_okta_pendente = ""
+  inicio_sessao_okta_ts = None
+  registrar_log_interno(
+      "🔄 [PAINEL WEB] Ordem de recarregar site e reiniciar login Okta enviada"
+      " ao robô!"
+  )
+  return {"sucesso": True}
+
 
 @app.get("/obter_comando_okta")
 def obter_comando_okta():
-    global ultimo_heartbeat, codigo_okta_pendente, forcar_reinicio_login, trocar_conta_pendente, conta_okta_ativa
-    ultimo_heartbeat = datetime.datetime.now()
-    cod = codigo_okta_pendente
-    reiniciar = forcar_reinicio_login
-    trocar = trocar_conta_pendente
-    codigo_okta_pendente = ""
-    forcar_reinicio_login = False
-    trocar_conta_pendente = ""
-    return {
-        "codigo": cod,
-        "reiniciar_login": reiniciar,
-        "trocar_conta": trocar,
-        "conta_ativa": conta_okta_ativa
-    }
+  global ultimo_heartbeat, codigo_okta_pendente, forcar_reinicio_login, trocar_conta_pendente, conta_okta_ativa
+  ultimo_heartbeat = datetime.datetime.now()
+  cod = codigo_okta_pendente
+  reiniciar = forcar_reinicio_login
+  trocar = trocar_conta_pendente
+  codigo_okta_pendente = ""
+  forcar_reinicio_login = False
+  trocar_conta_pendente = ""
+  return {
+      "codigo": cod,
+      "reiniciar_login": reiniciar,
+      "trocar_conta": trocar,
+      "conta_ativa": conta_okta_ativa,
+  }
+
 
 @app.post("/status_login_robo")
 async def atualizar_status_login_robo(request: Request):
-    global ultimo_heartbeat, status_login_robo, conta_okta_ativa
-    ultimo_heartbeat = datetime.datetime.now()
-    dados = await request.json()
-    status_login_robo = str(dados.get("status", "DESCONHECIDO"))
-    if dados.get("conta"):
-        conta_okta_ativa = str(dados.get("conta")).strip()
-    return {"sucesso": True}
+  global ultimo_heartbeat, status_login_robo, conta_okta_ativa, inicio_sessao_okta_ts
+  ultimo_heartbeat = datetime.datetime.now()
+  dados = await request.json()
+  novo_status = str(dados.get("status", "DESCONHECIDO"))
+  nova_conta = str(dados.get("conta", "")).strip()
+
+  if nova_conta and nova_conta != conta_okta_ativa:
+    conta_okta_ativa = nova_conta
+    if novo_status == "LOGADO":
+      inicio_sessao_okta_ts = time.time()
+
+  if novo_status == "LOGADO":
+    if status_login_robo != "LOGADO" or inicio_sessao_okta_ts is None:
+      inicio_sessao_okta_ts = time.time()
+  else:
+    inicio_sessao_okta_ts = None
+
+  status_login_robo = novo_status
+  return {"sucesso": True}
+
 
 @app.get("/ler_logs")
 def ler_logs(ultimo_indice: int = 0):
-    global ultimo_heartbeat, total_logs_recebidos, status_login_robo, conta_okta_ativa
-    
-    if ultimo_indice > total_logs_recebidos:
-        ultimo_indice = 0
-        
-    novos_logs = [log for log in logs_memoria if log["indice"] >= ultimo_indice]
-    # Tolerância de 60 segundos para evitar falsos "OFFLINE" durante gravações pesadas no banco
-    robo_on = (datetime.datetime.now() - ultimo_heartbeat).total_seconds() < 60
+  global ultimo_heartbeat, total_logs_recebidos, status_login_robo, conta_okta_ativa, inicio_sessao_okta_ts
 
-    return {
-        "logs": novos_logs,
-        "novo_indice": total_logs_recebidos, 
-        "robo_online": robo_on,
-        "status_login": status_login_robo if robo_on else "OFFLINE",
-        "conta_okta": conta_okta_ativa
-    }   
+  if ultimo_indice > total_logs_recebidos:
+    ultimo_indice = 0
 
+  novos_logs = [log for log in logs_memoria if log["indice"] >= ultimo_indice]
+  # Tolerância de 60 segundos para evitar falsos "OFFLINE" durante gravações pesadas no banco
+  robo_on = (datetime.datetime.now() - ultimo_heartbeat).total_seconds() < 60
+
+  tempo_sessao_seg = 0
+  if (
+      robo_on
+      and status_login_robo == "LOGADO"
+      and inicio_sessao_okta_ts is not None
+  ):
+    tempo_sessao_seg = max(0, int(time.time() - inicio_sessao_okta_ts))
+
+  return {
+      "logs": novos_logs,
+      "novo_indice": total_logs_recebidos,
+      "robo_online": robo_on,
+      "status_login": status_login_robo if robo_on else "OFFLINE",
+      "conta_okta": conta_okta_ativa,
+      "tempo_sessao_seg": tempo_sessao_seg,
+  }
 # ==========================================
 # ATUALIZAÇÕES MANUAIS DA PLANILHA (GRID)
 # ==========================================
