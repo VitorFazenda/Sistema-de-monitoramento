@@ -2993,12 +2993,25 @@ function fecharEdicaoTicket() {
     document.getElementById('titulo-config-robo').innerHTML = '⚙️ Configurar Nova Rotina';
     document.getElementById('btn-salvar-form').innerText = '💾 Salvar Configuração do HUB';
     document.getElementById('btn-cancelar-edicao').style.display = 'none';
+    
     if (!document.getElementById('config-hub').hasAttribute('readonly')) {
         document.getElementById('config-hub').value = '';
     }
+
+    // Volta sempre para "Avulso (Executar Agora)" e recolhe a gaveta de rotina ao fechar o modal
+    const selectTipo = document.getElementById('config-tipo');
+    if (selectTipo) selectTipo.value = 'avulso';
+
+    const selectAcao = document.getElementById('config-acao');
+    if (selectAcao) {
+        const isMonitorRestrito = currentUser && (currentUser.cargo === 'MONITOR GRAU 1' || currentUser.cargo === 'MONITOR GRAU 2');
+        selectAcao.value = isMonitorRestrito ? 'relatorio' : 'monitoramento';
+    }
+
+    mudarTipoTicket();
 }
 
-function salvarConfiguracao(){ 
+function salvarConfiguracao() { 
     let h = document.getElementById('config-hub').value.toUpperCase().trim(),
         a = document.getElementById('config-acao').value,
         t = document.getElementById('config-tipo').value;
@@ -3012,7 +3025,7 @@ function salvarConfiguracao(){
                 let iv = rw.querySelector('.int-val').value, i = rw.querySelector('.ini-val').value, f = rw.querySelector('.fim-val').value;
                 ss.push({ intervalo: parseInt(iv), ini: i, fim: f });
             });
-            if(ss.length > 0) rs[d] = ss;
+            if (ss.length > 0) rs[d] = ss;
         });
         if (Object.keys(rs).length === 1) return alert("Ative e adicione pelo menos um horário em um dia da semana.");
     }
@@ -3020,13 +3033,97 @@ function salvarConfiguracao(){
         method: 'POST',
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ hub: h, tipo: t, tipo_original: tipoTicketSendoEditado, acao: a, regras: rs })
-    }).then(() => { fecharEdicaoTicket(); carregarTickets(); }); 
+    }).then(() => { 
+        fecharEdicaoTicket(); 
+        carregarTickets(); 
+    }); 
+}
+
+// ==========================================
+// MODAL DE CONFIRMAÇÃO DE EXCLUSÃO DE TICKET
+// ==========================================
+let ticketPendenteExclusao = null;
+
+function garantirModalExclusaoTicketDOM() {
+    if (document.getElementById('modalConfirmarExclusaoTicket')) return;
+    const modal = document.createElement('div');
+    modal.id = 'modalConfirmarExclusaoTicket';
+    modal.className = 'modal-overlay';
+    modal.onclick = function(e) {
+        if (e.target === modal) fecharModalExclusaoTicket();
+    };
+    modal.innerHTML = `
+        <div class="modal-content" style="width: 440px; max-width: 95vw;">
+            <div class="modal-header" style="background: #dc2626;">
+                <span>🗑️ Confirmar Exclusão de Ticket</span>
+                <span style="cursor:pointer; opacity:0.8;" onclick="fecharModalExclusaoTicket()">❌</span>
+            </div>
+            <div style="padding: 22px 20px; text-align: center;" id="corpo-modal-excluir-ticket"></div>
+            <div style="padding: 12px 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: 10px; background: #f1f5f9;">
+                <button class="btn-footer-cancel" onclick="fecharModalExclusaoTicket()">Cancelar</button>
+                <button class="btn-footer-confirm" style="background: #dc2626;" onclick="confirmarExclusaoTicket()">🗑️ Sim, Excluir Ticket</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
 }
 
 function removerTicket(h, a, tipo) {
-    const descTipo = tipo ? ` (${tipo.toUpperCase()})` : '';
-    if(confirm(`Remover a tarefa de ${a.toUpperCase()}${descTipo} do HUB ${h}?`)) {
-        const url = tipo ? `${API_BASE_URL}/delete_ticket/${h}/${a}/${tipo}` : `${API_BASE_URL}/delete_ticket/${h}/${a}`;
-        fetch(url, { method: 'DELETE' }).then(() => carregarTickets());
+    garantirModalExclusaoTicketDOM();
+    ticketPendenteExclusao = { h, a, tipo };
+
+    const tipoUpper = (tipo || 'avulso').toUpperCase();
+    const isAvulso = tipoUpper === 'AVULSO';
+    const nomeAcao = a === 'relatorio' ? 'DOWNLOAD DE RELATÓRIO' : 'RASPAGEM DE MONITORAMENTO';
+    const badgeCorBg = isAvulso ? '#ffedd5' : '#e0e7ff';
+    const badgeCorTxt = isAvulso ? '#c2410c' : '#1d4ed8';
+    const badgeBorda = isAvulso ? '#fed7aa' : '#c7d2fe';
+    const iconeTipo = isAvulso ? '🚀 AVULSO' : '⏱️ ROTINA';
+
+    const corpo = document.getElementById('corpo-modal-excluir-ticket');
+    if (corpo) {
+        corpo.innerHTML = `
+            <div style="font-size: 36px; margin-bottom: 8px;">⚠️</div>
+            <p style="margin: 0 0 14px 0; color: #334155; font-size: 14px; font-weight: 600;">
+                Deseja realmente excluir este ticket da fila do robô?
+            </p>
+            <div style="background: #fef2f2; border: 1px solid #fecaca; border-left: 4px solid #dc2626; border-radius: 8px; padding: 14px; text-align: left;">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+                    <span style="font-size: 16px; font-weight: 800; color: #0f172a;">📍 HUB: ${h}</span>
+                    <span style="background:${badgeCorBg}; color:${badgeCorTxt}; border:1px solid ${badgeBorda}; padding:3px 8px; border-radius:6px; font-size:11px; font-weight:800;">
+                        ${iconeTipo}
+                    </span>
+                </div>
+                <div style="font-size: 12px; color: #64748b; font-weight: 700;">
+                    Tarefa: <span style="color: #b91c1c;">${nomeAcao}</span>
+                </div>
+            </div>
+        `;
     }
+
+    document.getElementById('modalConfirmarExclusaoTicket').classList.add('show');
 }
+
+function fecharModalExclusaoTicket() {
+    ticketPendenteExclusao = null;
+    const modal = document.getElementById('modalConfirmarExclusaoTicket');
+    if (modal) modal.classList.remove('show');
+}
+
+function confirmarExclusaoTicket() {
+    if (!ticketPendenteExclusao) return;
+    const { h, a, tipo } = ticketPendenteExclusao;
+    const url = tipo ? `${API_BASE_URL}/delete_ticket/${h}/${a}/${tipo}` : `${API_BASE_URL}/delete_ticket/${h}/${a}`;
+    
+    fetch(url, { method: 'DELETE' })
+        .then(() => {
+            fecharModalExclusaoTicket();
+            carregarTickets();
+            mostrarToastRobo(`🗑️ Ticket ${h} (${(tipo || '').toUpperCase()}) excluído com sucesso!`);
+        })
+        .catch(() => {
+            fecharModalExclusaoTicket();
+            alert("Erro ao excluir o ticket no servidor.");
+        });
+}
+
