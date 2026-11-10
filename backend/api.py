@@ -352,13 +352,34 @@ def construir_json_rotas_brutas() -> str:
         return "[]"
 
     colunas_uteis = [
-        'ID do Rota', 'Nome da Rota', 'Data da rota', 'Data', 'ID do Motorista',
-        'Tipo de parada', 'Parada', 'ID de Parada', 'Horários', 'ONTIME',
-        'Pontualidade', 'Hora de coleta concluída', 'Pacotes coletados',
-        'Pacotes estimados', 'Pacotes preparados', 'Tipo do Rota',
-        'Motivo', 'Detalhes', 'Pacotes não preparados/Não estão na agência',
-        'Pacotes não cabem no veículo', 'Pacotes em mau estado'
-    ]
+            'ID do Rota',
+            'Nome da Rota',
+            'Data da rota',
+            'Data',
+            'ID del Depósito',
+            'Depósito',
+            'ID do Nodo',
+            'ID do Motorista',
+            'ID do Veículo',
+            'Tipo de veículo',
+            'Tipo de parada',
+            'Parada',
+            'ID de Parada',
+            'Horários',
+            'ONTIME',
+            'Pontualidade',
+            'Hora de coleta concluída',
+            'Pacotes coletados',
+            'Pacotes estimados',
+            'Pacotes preparados',
+            'Tipo do Rota',
+            'Planejado',
+            'Motivo',
+            'Detalhes',
+            'Pacotes não preparados/Não estão na agência',
+            'Pacotes não cabem no veículo',
+            'Pacotes em mau estado',
+        ]
     cols_existentes = [c for c in colunas_uteis if c in df.columns]
     if len(cols_existentes) >= 5:
         df = df[cols_existentes]

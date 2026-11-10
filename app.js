@@ -447,12 +447,23 @@ function aplicarPermissoesDeCargo() {
     }
 }
 
+function ehSabadoPlantaoPlanilha() {
+    return new Date().getDay() === 6; // 6 = Sábado (Plantão: libera todos os HUBs na Planilha)
+}
+
+function rotaPertenceAosHubsDoUsuario(nomeRota) {
+    if (!currentUser || currentUser.hubs === "TODOS") return true;
+    const tr = String(nomeRota || "").toUpperCase();
+    const mh = currentUser.hubs.toUpperCase().split(',').map(h => h.trim()).filter(Boolean);
+    return mh.some(h => tr.includes(h));
+}
+
 function podeEditarLinha(rowData) {
     if (!currentUser || currentUser.cargo === 'MONITOR GRAU 1') return false; 
     if (currentUser.cargo === 'GERENTE' || currentUser.cargo === 'COORDENADOR') return true;
+    if (ehSabadoPlantaoPlanilha()) return true;
     if (currentUser.hubs !== "TODOS" && rowData && rowData.nome_rota) {
-        const tr = rowData.nome_rota.toUpperCase(), mh = currentUser.hubs.toUpperCase().split(',');
-        return mh.some(h => tr.includes(h.trim()));
+        return rotaPertenceAosHubsDoUsuario(rowData.nome_rota);
     }
     return true;
 }
@@ -981,10 +992,128 @@ function extrairDatasBI(dados) {
 }
 function populate(id, opts, def) { let el = document.getElementById(id); if(!el) return; let v = el.value; el.innerHTML = opts; if(v && v !== def && Array.from(el.options).some(o => o.value === v)) el.value = v; else el.value = def; }
 
-function popularDropdownsHubMonitoramento(hubs) {
-    const o = `<option value="TODOS">Todos os HUBs</option>` + hubs.map(h => `<option value="${h}">${h}</option>`).join('');
-    populate('filtro-hub-planilha', o, "TODOS"); populate('filtro-hub-escala', o, "TODOS");
+// Guarda os HUBs marcados nos checkboxes da Planilha de Rotas (vazio = Todos os HUBs)
+let hubsSelecionadosPlanilha = new Set();
+let listaHubsDisponiveisPlanilha = [];
+
+function garantirDropdownMultiHubPlanilha() {
+    const selectOriginal = document.getElementById('filtro-hub-planilha');
+    if (!selectOriginal) return;
+
+    // Esconde o <select> antigo e cria o componente com checkboxes no lugar dele
+    selectOriginal.style.display = 'none';
+
+    if (document.getElementById('multi-hub-planilha-wrap')) return;
+
+    const wrap = document.createElement('div');
+    wrap.id = 'multi-hub-planilha-wrap';
+    wrap.style.cssText = 'position: relative; display: inline-block; min-width: 175px; user-select: none;';
+    wrap.innerHTML = `
+        <button type="button" id="btn-multi-hub-planilha" onclick="toggleMenuMultiHubPlanilha(event)" style="width: 100%; padding: 6px 10px; border-radius: 4px; border: 1px solid #ccc; font-weight: bold; color: #1a237e; outline: none; cursor: pointer; background: #f8fafc; font-size: 13px; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+            <span id="label-multi-hub-planilha" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Todos os HUBs</span>
+            <span style="font-size: 10px; color: #475569;">▼</span>
+        </button>
+        <div id="menu-multi-hub-planilha" style="display: none; position: absolute; top: 110%; left: 0; min-width: 210px; max-height: 320px; overflow-y: auto; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; box-shadow: 0 8px 20px rgba(0,0,0,0.18); z-index: 2500; padding: 6px 0;"></div>
+    `;
+    selectOriginal.parentNode.insertBefore(wrap, selectOriginal.nextSibling);
+
+    if (!window.listenerFecharMultiHubPlanilha) {
+        window.listenerFecharMultiHubPlanilha = true;
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('#multi-hub-planilha-wrap')) {
+                const menu = document.getElementById('menu-multi-hub-planilha');
+                if (menu) menu.style.display = 'none';
+            }
+        });
+    }
 }
+
+function toggleMenuMultiHubPlanilha(event) {
+    if (event) event.stopPropagation();
+    const menu = document.getElementById('menu-multi-hub-planilha');
+    if (!menu) return;
+    menu.style.display = (menu.style.display === 'block') ? 'none' : 'block';
+}
+
+function atualizarTextoBotaoMultiHubPlanilha() {
+    const lbl = document.getElementById('label-multi-hub-planilha');
+    const btn = document.getElementById('btn-multi-hub-planilha');
+    if (!lbl) return;
+
+    const selecionados = Array.from(hubsSelecionadosPlanilha);
+    if (selecionados.length === 0) {
+        lbl.innerText = "Todos os HUBs";
+        if (btn) btn.title = "Todos os HUBs";
+    } else if (selecionados.length <= 2) {
+        lbl.innerText = selecionados.join(', ');
+        if (btn) btn.title = selecionados.join(', ');
+    } else {
+        lbl.innerText = `${selecionados.length} HUBs selecionados`;
+        if (btn) btn.title = selecionados.join(', ');
+    }
+}
+
+function renderizarOpcoesMultiHubPlanilha() {
+    garantirDropdownMultiHubPlanilha();
+    const menu = document.getElementById('menu-multi-hub-planilha');
+    if (!menu) return;
+
+    const todosAtivo = hubsSelecionadosPlanilha.size === 0;
+
+    let html = `
+        <div onclick="selecionarTodosHubsPlanilha(event)" style="padding: 8px 12px; cursor: pointer; font-size: 13px; font-weight: 800; color: ${todosAtivo ? '#ffffff' : '#1a237e'}; background: ${todosAtivo ? '#2563eb' : 'transparent'}; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between;" onmouseover="if(!${todosAtivo}) this.style.background='#f1f5f9'" onmouseout="if(!${todosAtivo}) this.style.background='transparent'">
+            <span>Todos os HUBs</span>
+            ${todosAtivo ? '<span style="font-size: 11px;">✓</span>' : ''}
+        </div>
+    `;
+
+    html += listaHubsDisponiveisPlanilha.map(h => {
+        const marcado = hubsSelecionadosPlanilha.has(h);
+        const hEsc = h.replace(/'/g, "\\'");
+        return `
+            <label onclick="event.stopPropagation()" style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; cursor: pointer; font-size: 13px; font-weight: ${marcado ? '800' : '600'}; color: ${marcado ? '#1a237e' : '#334155'}; background: ${marcado ? '#eff6ff' : 'transparent'};" onmouseover="if(!this.querySelector('input').checked) this.style.background='#f8fafc'" onmouseout="if(!this.querySelector('input').checked) this.style.background='transparent'">
+                <input type="checkbox" ${marcado ? 'checked' : ''} onchange="alternarCheckHubPlanilha('${hEsc}', this.checked)" style="width: 15px; height: 15px; accent-color: #1a237e; cursor: pointer; margin: 0;">
+                <span>${h}</span>
+            </label>
+        `;
+    }).join('');
+
+    menu.innerHTML = html;
+    atualizarTextoBotaoMultiHubPlanilha();
+}
+
+function selecionarTodosHubsPlanilha(event) {
+    if (event) event.stopPropagation();
+    hubsSelecionadosPlanilha.clear();
+    renderizarOpcoesMultiHubPlanilha();
+    aplicarFiltroHubPlanilha();
+    const menu = document.getElementById('menu-multi-hub-planilha');
+    if (menu) menu.style.display = 'none';
+}
+
+function alternarCheckHubPlanilha(hub, marcado) {
+    if (marcado) {
+        hubsSelecionadosPlanilha.add(hub);
+    } else {
+        hubsSelecionadosPlanilha.delete(hub);
+    }
+    renderizarOpcoesMultiHubPlanilha();
+    aplicarFiltroHubPlanilha();
+}
+
+function popularDropdownsHubMonitoramento(hubsPlanilha, hubsEscala) {
+    listaHubsDisponiveisPlanilha = Array.isArray(hubsPlanilha) ? hubsPlanilha : [];
+    // Remove da seleção caso algum HUB antigo não exista mais na lista
+    Array.from(hubsSelecionadosPlanilha).forEach(h => {
+        if (!listaHubsDisponiveisPlanilha.includes(h)) hubsSelecionadosPlanilha.delete(h);
+    });
+    renderizarOpcoesMultiHubPlanilha();
+
+    const listaEscala = Array.isArray(hubsEscala) ? hubsEscala : listaHubsDisponiveisPlanilha;
+    const oEscala = `<option value="TODOS">Todos os HUBs</option>` + listaEscala.map(h => `<option value="${h}">${h}</option>`).join('');
+    populate('filtro-hub-escala', oEscala, "TODOS");
+}
+
 function popularDropdownsHubBI(hubs) {
     const o = `<option value="TODOS">Todos os HUBs</option>` + hubs.map(h => `<option value="${h}">${h}</option>`).join('');
     populate('filtro-hub-est', o, "TODOS");
@@ -1002,7 +1131,6 @@ function popularDropdownsDataBI(datas) {
     el.innerHTML = o;
 
     if (!filtroDataBIInicializado) {
-        // Na 1ª carga ao abrir o sistema, seleciona direto a página do dia para carregar rápido!
         el.value = dataMaisRecente;
         filtroDataBIInicializado = true;
     } else if (valorAnterior && Array.from(el.options).some(opt => opt.value === valorAnterior)) {
@@ -1014,13 +1142,21 @@ function popularDropdownsDataBI(datas) {
 
 function aplicarFiltroHubPlanilha() {
     if (!gridApi) return;
-    const hS = document.getElementById('filtro-hub-planilha').value;
     let dF = rotasGlobais;
-    if (hS !== "TODOS") dF = rotasGlobais.filter(r => r.nome_rota && r.nome_rota.toUpperCase().startsWith(hS));
+
+    if (hubsSelecionadosPlanilha.size > 0) {
+        dF = rotasGlobais.filter(r => {
+            if (!r.nome_rota) return false;
+            const nomeUpper = String(r.nome_rota).toUpperCase().trim();
+            const prefixoHub = nomeUpper.split('_')[0].trim();
+            if (hubsSelecionadosPlanilha.has(prefixoHub)) return true;
+            return Array.from(hubsSelecionadosPlanilha).some(h => nomeUpper.startsWith(h + '_') || nomeUpper === h);
+        });
+    }
+
     const ordenadas = ordenarRotasPorSequencia(dF);
     gridApi.setGridOption('rowData', ordenadas);
 
-    // Ao abrir o sistema pela 1ª vez, filtra a planilha automaticamente para a data do dia (mais recente)
     if (!window.filtroDataPlanilhaInicializado && ordenadas.length > 0) {
         window.filtroDataPlanilhaInicializado = true;
         const dataHojePlanilha = ordenadas[0].data;
@@ -1041,6 +1177,9 @@ function aplicarFiltroHubPlanilha() {
 }
 
 function limparFiltrosPlanilha() {
+    hubsSelecionadosPlanilha.clear();
+    renderizarOpcoesMultiHubPlanilha();
+
     const selHub = document.getElementById('filtro-hub-planilha');
     if (selHub) selHub.value = "TODOS";
 
@@ -1061,30 +1200,68 @@ function limparFiltrosPlanilha() {
     aplicarFiltroHubPlanilha();
 }
 
-function filtrarBaseRelatorio(dId, hId, iniId, fimId, contId) {
-    const hS = document.getElementById(hId) ? document.getElementById(hId).value : "TODOS";
-    const dS = document.getElementById(dId) ? document.getElementById(dId).value : "TODAS";
-    const cP = document.getElementById(contId);
-    if (dS === "PERIODO") { if(cP) cP.style.display = 'flex'; } else { if(cP) cP.style.display = 'none'; }
-    
-    let dF = rotasBrutas;
-    if (hS !== "TODOS") dF = dF.filter(r => String(r['Nome da Rota'] || "").toUpperCase().startsWith(hS));
-    
-    if (dS === "PERIODO") {
-        let dI = document.getElementById(iniId) ? document.getElementById(iniId).value : ""; let dFm = document.getElementById(fimId) ? document.getElementById(fimId).value : ""; 
-        if (dI || dFm) {
-            dF = dF.filter(r => {
-                let dr = String(r['Data da rota'] || r['Data'] || ""); if (!dr) return false;
-                let pts = dr.split(/[-/ ]/); let dtR;
-                if (pts.length >= 3) { if (pts[0].length === 4) dtR = new Date(pts[0], pts[1]-1, pts[2]); else dtR = new Date(pts[2], pts[1]-1, pts[0]); } else return false;
-                let mC = true;
-                if (dI) { let [y, m, d] = dI.split('-'); if (dtR < new Date(y, m-1, d)) mC = false; }
-                if (dFm) { let [y, m, d] = dFm.split('-'); if (dtR > new Date(y, m-1, d)) mC = false; }
-                return mC;
-            });
-        }
-    } else if (dS !== "TODAS") dF = dF.filter(r => String(r['Data da rota'] || r['Data'] || "") === dS);
-    return dF;
+// Armazena separadamente todas as Rotas Avulsas (tem ID do Rota, mas não tem Nome da Rota)
+// para serem usadas exclusivamente na sub-aba "Rotas avulsas"
+let ROTAS_AVULSAS_DATA = {
+    raw: [],
+    totalRotas: 0,
+    totalParadas: 0
+};
+
+// 1. Identifica se a linha é a parada final de retorno ao galpão (Parada == Depósito ou ID de Parada == ID del Depósito)
+function ehParadaDeGalpaoDeposito(r) {
+    if (!r) return false;
+    const parada = String(r['Parada'] || r['Stop'] || '').trim().toUpperCase();
+    const deposito = String(r['Depósito'] || r['Deposito'] || '').trim().toUpperCase();
+    if (parada && deposito && parada !== 'NAN' && parada === deposito) {
+        return true;
+    }
+
+    const idParada = String(r['ID de Parada'] || r['ID da parada'] || '').trim().toUpperCase();
+    const idDeposito = String(r['ID del Depósito'] || r['ID do Deposito'] || r['ID do Nodo'] || '').trim().toUpperCase();
+    if (idParada && idDeposito && idParada !== 'NAN' && idParada === idDeposito) {
+        return true;
+    }
+
+    // Fallback de segurança caso o registro antigo não tenha a coluna Depósito:
+    // verifica se o ID de Parada é exatamente o código do HUB (ex: BRXSP10)
+    const prefixoRota = String(r['Nome da Rota'] || '').trim().toUpperCase().split('_')[0].trim();
+    if (idParada && prefixoRota && idParada === prefixoRota) {
+        return true;
+    }
+    if (idParada && /^BRX[A-Z]{2}\d+$/.test(idParada)) {
+        return true;
+    }
+    return false;
+}
+
+// 2. Diferencia Rota Programada (ID + Nome da Rota) de Rota Avulsa (ID sem Nome da Rota)
+function ehRotaAvulsaRelatorio(r) {
+    if (!r) return false;
+    const idRota = String(r['ID do Rota'] || r['ID da Rota'] || '').trim();
+    const nomeRota = String(r['Nome da Rota'] || r['Nome Rota'] || '').trim();
+    const nomeVazio = (!nomeRota || nomeRota.toLowerCase() === 'nan' || nomeRota.toLowerCase() === 'none');
+    return Boolean(idRota && idRota.toLowerCase() !== 'nan') && nomeVazio;
+}
+
+function ehRotaProgramadaRelatorio(r) {
+    if (!r) return false;
+    const idRota = String(r['ID do Rota'] || r['ID da Rota'] || '').trim();
+    const nomeRota = String(r['Nome da Rota'] || r['Nome Rota'] || '').trim();
+    const nomeValido = Boolean(nomeRota && nomeRota.toLowerCase() !== 'nan' && nomeRota.toLowerCase() !== 'none');
+    return Boolean(idRota && idRota.toLowerCase() !== 'nan') && nomeValido;
+}
+
+// 3. Descobre o HUB da linha (funciona tanto para Rota Programada quanto para Rota Avulsa)
+function obterHubLinhaRelatorio(r) {
+    if (!r) return "";
+    const idDep = String(r['ID del Depósito'] || r['ID do Deposito'] || r['ID do Nodo'] || '').trim().toUpperCase();
+    if (idDep && idDep !== 'NAN' && idDep !== 'NONE') return idDep;
+    const nome = String(r['Nome da Rota'] || r['Nome Rota'] || '').trim().toUpperCase();
+    if (nome && nome !== 'NAN' && nome !== 'NONE') {
+        return nome.split('_')[0].trim();
+    }
+    return "";
 }
 
 let estatisticasCalculadas = false;
@@ -1095,16 +1272,31 @@ function filtrarListaBrutaPorHubEPeriodo(listaBase) {
     const hS = document.getElementById('filtro-hub-est') ? document.getElementById('filtro-hub-est').value : "TODOS";
     const dS = document.getElementById('filtro-data-est') ? document.getElementById('filtro-data-est').value : "TODAS";
     const cP = document.getElementById('container-periodo-est');
-    if (dS === "PERIODO") { if(cP) cP.style.display = 'flex'; } else { if(cP) cP.style.display = 'none'; }
+    if (dS === "PERIODO") { if (cP) cP.style.display = 'flex'; } else { if (cP) cP.style.display = 'none'; }
 
-    let dF = listaBase || [];
+    // 1º Exclui todas as linhas em que Parada == Depósito (parada no galpão)
+    let dF = (listaBase || []).filter(r => !ehParadaDeGalpaoDeposito(r));
+
+    // 2º Filtra pelas permissões de HUB do usuário logado
     if (currentUser && currentUser.hubs !== "TODOS") {
-        const mh = currentUser.hubs.toUpperCase().split(',').map(h => h.trim());
-        dF = dF.filter(r => mh.some(h => String(r["Nome da Rota"] || "").toUpperCase().includes(h)));
+        const mh = currentUser.hubs.toUpperCase().split(',').map(h => h.trim()).filter(Boolean);
+        dF = dF.filter(r => {
+            const hubLinha = obterHubLinhaRelatorio(r);
+            const nomeRota = String(r["Nome da Rota"] || "").toUpperCase();
+            return mh.some(h => hubLinha === h || nomeRota.includes(h));
+        });
     }
+
+    // 3º Filtra pelo HUB selecionado no topo de Estatísticas
     if (hS !== "TODOS") {
-        dF = dF.filter(r => String(r['Nome da Rota'] || "").toUpperCase().startsWith(hS));
+        dF = dF.filter(r => {
+            const hubLinha = obterHubLinhaRelatorio(r);
+            const nomeRota = String(r['Nome da Rota'] || "").toUpperCase();
+            return hubLinha === hS || nomeRota.startsWith(hS);
+        });
     }
+
+    // 4º Filtra pela Data ou Período selecionado
     if (dS === "PERIODO") {
         let dI = document.getElementById('data-ini-est') ? document.getElementById('data-ini-est').value : "";
         let dFm = document.getElementById('data-fim-est') ? document.getElementById('data-fim-est').value : "";
@@ -1123,7 +1315,76 @@ function filtrarListaBrutaPorHubEPeriodo(listaBase) {
     } else if (dS !== "TODAS") {
         dF = dF.filter(r => String(r['Data da rota'] || r['Data'] || "").trim() === dS);
     }
+
     return dF;
+}
+
+// Mantém compatibilidade quando o Monitor de Ocorrências recalcula o Geral da Operação:
+// retorna apenas as Rotas Programadas (sem rotas avulsas e sem paradas no galpão)
+function filtrarBaseRelatorio() {
+    const baseLimpa = filtrarListaBrutaPorHubEPeriodo(rotasBrutas);
+    return baseLimpa.filter(r => ehRotaProgramadaRelatorio(r));
+}
+
+async function aplicarFiltroUnificadoEstatisticas() {
+    const dS = document.getElementById('filtro-data-est') ? document.getElementById('filtro-data-est').value : "TODAS";
+
+    if ((dS === "TODAS" || dS === "PERIODO") && !historicoCompletoCarregado) {
+        controlarLoadingInfoAba('estatisticas', true);
+        try {
+            const r = await fetch(`${API_BASE_URL}/rotas_brutas`);
+            const todos = await r.json();
+            if (Array.isArray(todos)) {
+                rotasBrutas = todos;
+                historicoCompletoCarregado = true;
+                popularDropdownsHubBI(extrairHubs(rotasBrutas, 'Nome da Rota'));
+            }
+        } catch (e) {
+            console.error(e);
+        } finally {
+            controlarLoadingInfoAba('estatisticas', false);
+        }
+    } else if (dS !== "TODAS" && dS !== "PERIODO" && !historicoCompletoCarregado && !cacheRelatoriosPorData[dS]) {
+        controlarLoadingInfoAba('estatisticas', true);
+        try {
+            const r = await fetch(`${API_BASE_URL}/rotas_brutas?data=${encodeURIComponent(dS)}`);
+            const doDia = await r.json();
+            if (Array.isArray(doDia)) {
+                cacheRelatoriosPorData[dS] = doDia;
+                rotasBrutas = doDia;
+                popularDropdownsHubBI(extrairHubs(
+                    rotasGlobais.length > 0 ? rotasGlobais : rotasBrutas,
+                    rotasGlobais.length > 0 ? 'nome_rota' : 'Nome da Rota'
+                ));
+            }
+        } catch (e) {
+            console.error(e);
+        } finally {
+            controlarLoadingInfoAba('estatisticas', false);
+        }
+    } else if (dS !== "TODAS" && dS !== "PERIODO" && !historicoCompletoCarregado && cacheRelatoriosPorData[dS]) {
+        rotasBrutas = cacheRelatoriosPorData[dS];
+    }
+
+    // Base filtrada por Data e HUB e já sem as linhas onde Parada == Depósito
+    const baseSemGalpao = filtrarListaBrutaPorHubEPeriodo(rotasBrutas);
+
+    // 1. Separa apenas as ROTAS PROGRAMADAS (têm ID e Nome da Rota) para Pontualidade, Ocorrência e Geral da Operação
+    const baseProgramadas = baseSemGalpao.filter(r => ehRotaProgramadaRelatorio(r));
+
+    // 2. Separa apenas as ROTAS AVULSAS (têm ID e não têm Nome da Rota) para a sub-aba "Rotas avulsas"
+    const baseAvulsas = baseSemGalpao.filter(r => ehRotaAvulsaRelatorio(r));
+    ROTAS_AVULSAS_DATA = {
+        raw: baseAvulsas,
+        totalRotas: new Set(baseAvulsas.map(r => String(r['ID do Rota'] || '').trim()).filter(Boolean)).size,
+        totalParadas: baseAvulsas.length
+    };
+
+    gerarBI(baseProgramadas);
+    limparFiltroMotivoOC();
+    gerarOC(baseProgramadas);
+    gerarGeralOperacao(baseProgramadas);
+    estatisticasCalculadas = true;
 }
 
 async function aplicarFiltroUnificadoEstatisticas() {
@@ -1196,18 +1457,26 @@ function carregarRotas(exibirToastRobo = false) {
                         try { l.coresIndividuais = JSON.parse(l.cores_customizadas); } catch(e) { l.coresIndividuais = {}; }
                     }
                 });
-                if (currentUser.hubs !== "TODOS") {
-                    const mh = currentUser.hubs.toUpperCase().split(',').map(h => h.trim());
-                    rotasGlobais = d.filter(r => mh.some(h => (r.nome_rota || "").toUpperCase().includes(h)));
-                } else {
-                    rotasGlobais = d;
-                }
+
+                // Aos Sábados (Plantão), libera a visualização de TODOS os HUBs na Planilha de Monitoramento
+                const liberarTodosSabado = ehSabadoPlantaoPlanilha();
+                const rotasRestritasUsuario = (currentUser.hubs !== "TODOS")
+                    ? d.filter(r => rotaPertenceAosHubsDoUsuario(r.nome_rota))
+                    : d;
+
+                rotasGlobais = (currentUser.hubs !== "TODOS" && !liberarTodosSabado)
+                    ? rotasRestritasUsuario
+                    : d;
+
                 rotasGlobais = ordenarRotasPorSequencia(rotasGlobais);
                 rotasJaCarregadas = true;
                 if (document.getElementById('home-stat-rotas')) document.getElementById('home-stat-rotas').innerText = rotasGlobais.length;
-                const hubsExtraidos = extrairHubs(rotasGlobais, 'nome_rota');
-                popularDropdownsHubMonitoramento(hubsExtraidos);
-                popularDropdownsHubBI(hubsExtraidos);
+
+                const hubsPlanilha = extrairHubs(rotasGlobais, 'nome_rota');
+                const hubsRestritos = extrairHubs(rotasRestritasUsuario, 'nome_rota');
+
+                popularDropdownsHubMonitoramento(hubsPlanilha, hubsRestritos);
+                popularDropdownsHubBI(hubsRestritos);
                 aplicarFiltroHubPlanilha();
                 inicializarEscala();
                 if (exibirToastRobo) mostrarToastRobo("Informações da planilha atualizadas pelo robô!");
@@ -2737,7 +3006,7 @@ function inicializarEscala(){
         if (pR) pR.style.display = 'none'; if (bS) bS.disabled = true; if (av) av.innerHTML = "Selecione um HUB específico para liberar a edição."; return;
     }
     if (bS && (!currentUser || currentUser.cargo !== 'MONITOR GRAU 1')) bS.disabled = false; if (av) av.innerHTML = "Preencha os monitores e clique em Salvar Escala.";
-    rotasGlobais.filter(r => r.data.includes(d)).forEach(r => {
+    rotasGlobais.filter(r => r.data.includes(d) && rotaPertenceAosHubsDoUsuario(r.nome_rota)).forEach(r => {
         let hR = r.nome_rota ? r.nome_rota.split('_')[0].toUpperCase() : "";
         if (hS === "TODOS" || hR === hS || hR.includes(hS)) { if(r.cluster && String(r.cluster).toUpperCase() !== 'SEM CLUSTER') { let cK = String(r.cluster).toUpperCase().trim(); clusterData[cK] = (clusterData[cK] || 0) + 1; if(r.monitor) monitorAssignments[cK] = String(r.monitor).toUpperCase().trim(); } }
     });

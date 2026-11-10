@@ -370,7 +370,6 @@ def garantir_login(page, forcar_recarregamento=False):
     pulsar_watchdog()
     cmd = ler_comando_okta_api()
 
-    # 1. Verifica se o utilizador trocou a conta no seletor (Ex: Vitor.Martins <-> Larissa.Campos)
     nova_conta = str(cmd.get("trocar_conta", "")).strip()
     if nova_conta and nova_conta in CONTAS_MELI:
       CONTA_ATUAL = nova_conta
@@ -399,7 +398,6 @@ def garantir_login(page, forcar_recarregamento=False):
       inicio_espera_okta = time.time()
       continue
 
-    # 2. Se clicou em "Recarregar Site / Reiniciar Login" OU se passaram 5 minutos (300s) sem enviar o código Okta
     tempo_esperando_okta = time.time() - inicio_espera_okta
     passou_5_minutos = aviso_okta_enviado and tempo_esperando_okta >= 300
 
@@ -438,7 +436,6 @@ def garantir_login(page, forcar_recarregamento=False):
     senha_meli_atual = credenciais_atuais["pass"]
 
     try:
-      # 3. Campo de Utilizador (Identifier)
       campo_user = page.locator('input[name="identifier"]')
       if campo_user.count() > 0 and campo_user.first.is_visible():
         campos_cred_visiveis = page.locator(
@@ -462,7 +459,6 @@ def garantir_login(page, forcar_recarregamento=False):
           time.sleep(3.5)
           continue
 
-      # 4. Se aparecer lista de fatores de autenticação
       btn_fator = page.locator(
           '[data-se="okta_verify-totp"] a, [data-se="google_otp"] a,'
           ' a:has-text("Inserir um código"), a:has-text("Enter a code")'
@@ -473,7 +469,6 @@ def garantir_login(page, forcar_recarregamento=False):
         time.sleep(2.5)
         continue
 
-      # 5. Campos de Senha ou Código Okta
       campo_cred = page.locator(
           'input[name="credentials.passcode"], input[name="credentials.totp"],'
           ' input[name="answer"], input[type="password"], input[type="tel"],'
@@ -584,11 +579,11 @@ def traduzir_status_meli(status_bruto: str, coletados_int: int) -> str:
 
 
 # ==========================================
-# MÓDULO 1: RASPAGEM DE MONITORAMENTO
+# MÓDULO 1: RASPAGEM DE MONITORAMENTO (ALTA PRECISÃO)
 # ==========================================
 def aguardar_carregamento_meli(page, tempo_max=15):
   """Aguarda os spinners e skeletons do Mercado Livre sumirem após limpar ou aplicar filtros"""
-  time.sleep(1.5)
+  time.sleep(1.2)
   fim = time.time() + tempo_max
   while time.time() < fim:
     pulsar_watchdog()
@@ -601,12 +596,12 @@ def aguardar_carregamento_meli(page, tempo_max=15):
         break
     except Exception:
       break
-    time.sleep(0.6)
-  time.sleep(1.5)
+    time.sleep(0.5)
+  time.sleep(1.0)
 
 
 def clicar_limpar_todos_filtros(page):
-  """Clica no botão 'Limpar todos' usando os seletores nativos do Playwright (igual ao backup funcional)"""
+  """Clica no botão 'Limpar todos' usando os seletores nativos do Playwright"""
   pulsar_watchdog()
   seletores_limpar = [
       'button.button-link__button:has(span:has-text("Limpar todos"))',
@@ -634,7 +629,7 @@ def clicar_limpar_todos_filtros(page):
 
 
 def garantir_deposito_sem_filtro(page):
-  """Garante que nenhuma tag de HUB anterior (ex: BRXSP10) ficou presa quando a tarefa é TODOS"""
+  """Garante que nenhuma tag de HUB anterior ficou presa quando a tarefa é TODOS"""
   for _ in range(3):
     pulsar_watchdog()
     try:
@@ -674,111 +669,423 @@ def garantir_deposito_sem_filtro(page):
   return True
 
 
-def extrair_cards_locators_playwright(page, hub_alvo, data_hoje_str):
-  """Extrai os cards da página usando exatamente a lógica do backup funcional"""
-  resultados = []
+def obter_total_rotas_painel_meli(page) -> int:
+  """Lê o número exato de rotas no card de estatísticas: <div class='stats__item--routes'>...<p class='item-content__value'>242</p>"""
+  pulsar_watchdog()
   try:
-    linhas_rotas = page.locator("div.list > div.monitoring-row").all()
-    if not linhas_rotas:
-      linhas_rotas = page.locator("div.monitoring-row").all()
-    if not linhas_rotas:
-      linhas_rotas = page.locator("div.monitoring-row-higher").all()
+    total = page.evaluate("""() => {
+            // 1. Seletor exato da caixa de Rotas (Print 2)
+            const elRoutes = document.querySelector('.stats__item--routes p.item-content__value');
+            if (elRoutes) {
+                const txt = (elRoutes.textContent || '').replace(/\\D/g, '');
+                if (txt !== '') return parseInt(txt, 10);
+            }
 
-    for linha in linhas_rotas:
-      pulsar_watchdog()
-      texto_card_completo = linha.text_content() or ""
+            // 2. Fallback procurando o bloco .item-content cujo título seja 'Rotas'
+            const blocos = Array.from(document.querySelectorAll('.stats .item-content, .stats__item .item-content'));
+            for (const b of blocos) {
+                const ps = b.querySelectorAll('p');
+                if (ps.length >= 2) {
+                    const titulo = (ps[0].textContent || '').trim().toLowerCase();
+                    if (titulo === 'rotas') {
+                        const val = (ps[1].textContent || '').replace(/\\D/g, '');
+                        if (val !== '') return parseInt(val, 10);
+                    }
+                }
+            }
 
-      nome_el = linha.locator("p.monitoring-row-higher-details__text.bold").first
-      nome_bruto = (nome_el.text_content() or "") if nome_el.count() > 0 else ""
-      nome_rota = nome_bruto.replace("Rota ", "").strip()
+            // 3. Fallback primeiro p.item-content__value dentro de .stats
+            const elFirst = document.querySelector('.stats p.item-content__value');
+            if (elFirst) {
+                const txt = (elFirst.textContent || '').replace(/\\D/g, '');
+                if (txt !== '') return parseInt(txt, 10);
+            }
+            return -1;
+        }""")
+    return int(total) if total is not None else -1
+  except Exception:
+    return -1
 
-      if (
-          "NÃO PLANEJADA" in nome_rota.upper()
-          or "NAO PLANEJADA" in nome_rota.upper()
-      ):
-        prefixo_hub = hub_alvo if hub_alvo != "TODOS" else "AVULSA"
-        nome_rota = f"{prefixo_hub}_ROTA_AVULSA"
 
-      id_el = linha.locator(".button-copy__text").first
-      id_bruto = (id_el.text_content() or "") if id_el.count() > 0 else ""
-      id_rota = re.sub(r"[^0-9]", "", id_bruto)
-      if not id_rota:
-        continue
+def obter_assinatura_pagina_atual(page) -> str:
+  """Retorna os primeiros e últimos IDs da página atual para confirmar que a paginação trocou os cards"""
+  try:
+    return (
+        page.evaluate("""() => {
+            const rows = Array.from(document.querySelectorAll('div.list > div.monitoring-row, div.monitoring-row'));
+            if (rows.length === 0) return '';
+            const ids = rows.map(r => {
+                const el = r.querySelector('.button-copy__text');
+                return el ? (el.textContent || '').replace(/[^0-9]/g, '') : '';
+            }).filter(Boolean);
+            if (ids.length === 0) return '';
+            return `${ids.length}:${ids[0]}_${ids[ids.length - 1]}`;
+        }""")
+        or ""
+    )
+  except Exception:
+    return ""
 
-      mot_el = linha.locator('[data-testid="carrier-or-driver-name"]').first
-      motorista = (
-          (mot_el.text_content() or "").strip() if mot_el.count() > 0 else ""
+
+def extrair_cards_pagina_js(page, hub_alvo, data_hoje_str):
+  """Extrai instantaneamente todas as rotas da página atual direto do DOM (baseado no HTML oficial do Meli)"""
+  pulsar_watchdog()
+  try:
+    cards_brutos = page.evaluate(
+        """(hubAlvo) => {
+            const linhas = Array.from(document.querySelectorAll('div.list > div.monitoring-row, div.monitoring-row'));
+            const resultados = [];
+
+            for (const linha of linhas) {
+                const higher = linha.querySelector('.monitoring-row-higher') || linha;
+                const lower = linha.querySelector('.monitoring-row-lower') || linha;
+                const textoCompleto = linha.textContent || '';
+
+                // 1. ID da Rota (<p class="button-copy__text">Rota ID: 469604458</p>)
+                let idBruto = '';
+                const idEl = linha.querySelector('.button-copy__text');
+                if (idEl) {
+                    idBruto = idEl.textContent || '';
+                } else {
+                    const mId = textoCompleto.match(/Rota\\s*ID:\\s*(\\d+)/i);
+                    if (mId) idBruto = mId[1];
+                }
+                const idRota = idBruto.replace(/[^0-9]/g, '');
+                if (!idRota) continue;
+
+                // 2. Nome da Rota (<p class="monitoring-row-higher-details__text bold">Rota BRXSP10_C13_DED_17</p>)
+                const nomeEl = higher.querySelector('.main-data p.monitoring-row-higher-details__text.bold, p.monitoring-row-higher-details__text.bold');
+                let nomeRota = nomeEl ? (nomeEl.textContent || '').replace(/^Rota\\s+/i, '').trim() : '';
+                if (nomeRota.toUpperCase().includes('NÃO PLANEJADA') || nomeRota.toUpperCase().includes('NAO PLANEJADA')) {
+                    const pref = (hubAlvo && hubAlvo !== 'TODOS') ? hubAlvo : 'AVULSA';
+                    nomeRota = `${pref}_ROTA_AVULSA`;
+                }
+
+                // 3. Motorista ([data-testid="carrier-or-driver-name"] ou .monitoring-row-lower-details.driver p)
+                let motorista = '';
+                const motEl = higher.querySelector('[data-testid="carrier-or-driver-name"]') || lower.querySelector('.monitoring-row-lower-details.driver p');
+                if (motEl) {
+                    motorista = (motEl.textContent || '').trim();
+                }
+
+                // 4. Placa (.monitoring-row-lower-details.vehicle p -> "IQT4160 | HR")
+                let placa = '';
+                const placaEl = lower.querySelector('.monitoring-row-lower-details.vehicle p');
+                if (placaEl) {
+                    placa = (placaEl.textContent || '').split('|')[0].trim();
+                }
+
+                // 5. Horário (.monitoring-row-higher-details.eta p -> "ETA 13h36" ou "ATA: 11h30")
+                let horario = 'Sem Horário';
+                const horEl = higher.querySelector(".monitoring-row-higher-details.eta p, div[data-testid='active-route-eta'] p");
+                if (horEl) {
+                    const hTxt = (horEl.textContent || '').trim();
+                    if (hTxt) horario = hTxt;
+                }
+
+                // 6. Pacotes Coletados e Estimados (.monitoring-row-higher-details.packages)
+                let coletados = '0';
+                let estimados = '0';
+                const pkgBox = higher.querySelector('.monitoring-row-higher-details.packages');
+                const textoPkg = pkgBox ? (pkgBox.textContent || '') : textoCompleto;
+
+                const colEl = pkgBox ? pkgBox.querySelector('p.bold') : null;
+                if (colEl) {
+                    const cDig = (colEl.textContent || '').replace(/\\D/g, '');
+                    if (cDig !== '') coletados = cDig;
+                } else {
+                    const mCol = textoPkg.match(/(\\d[\\d\\.]*)\\s*(?:pacotes\\s*)?coletados/i);
+                    if (mCol) coletados = mCol[1].replace(/\\D/g, '');
+                }
+
+                const mEst = textoPkg.match(/(\\d[\\d\\.]*)\\s*(?:pacotes\\s*)?estimados/i);
+                if (mEst) {
+                    estimados = mEst[1].replace(/\\D/g, '');
+                }
+
+                // 7. Status (.monitoring-row-higher-details.status-main p.bold)
+                const stEl = higher.querySelector('.status-main p.bold, .monitoring-row-higher-details.status p.bold');
+                const statusBruto = stEl ? (stEl.textContent || '').trim() : 'Sem início';
+
+                resultados.push({
+                    id_rota: idRota,
+                    nome_rota: nomeRota,
+                    motorista: motorista,
+                    placa: placa,
+                    horario: horario,
+                    coletados: coletados,
+                    estimados: estimados,
+                    status_bruto: statusBruto
+                });
+            }
+            return resultados;
+        }""",
+        hub_alvo,
+    )
+
+    formatados = []
+    for item in cards_brutos or []:
+      int_est = (
+          int(item["estimados"]) if str(item["estimados"]).isdigit() else 0
       )
-
-      placa = ""
-      try:
-        placa_el = linha.locator(".monitoring-row-lower-details.vehicle p").first
-        if placa_el.count() > 0:
-          placa_bruta = placa_el.text_content() or ""
-          placa = placa_bruta.split("|")[0].strip()
-      except Exception:
-        placa = ""
-
-      horario_el = linha.locator(
-          ".monitoring-row-higher-details.eta p,"
-          " div[data-testid='active-route-eta'] p"
-      ).first
-      horario = (
-          (horario_el.text_content() or "").strip()
-          if horario_el.count() > 0
-          else "Sem Horário"
+      int_col = (
+          int(item["coletados"]) if str(item["coletados"]).isdigit() else 0
       )
-
-      match_col = re.search(
-          r"(\d[\d\.]*)\s*(?:pacotes\s*)?coletados",
-          texto_card_completo,
-          re.IGNORECASE,
-      )
-      coletados = re.sub(r"\D", "", match_col.group(1)) if match_col else "0"
-
-      match_est = re.search(
-          r"(\d[\d\.]*)\s*(?:pacotes\s*)?estimados",
-          texto_card_completo,
-          re.IGNORECASE,
-      )
-      estimados = re.sub(r"\D", "", match_est.group(1)) if match_est else "0"
-
-      int_est = int(estimados) if estimados.isdigit() else 0
-      int_col = int(coletados) if coletados.isdigit() else 0
       restante = str(int_est - int_col)
-
-      status_el = linha.locator(
-          ".status-main p.bold, .monitoring-row-higher-details.status p.bold"
-      ).first
-      status_meli_bruto = (
-          (status_el.text_content() or "").strip()
-          if status_el.count() > 0
-          else "Sem início"
-      )
-      status_traduzido = traduzir_status_meli(status_meli_bruto, int_col)
-
-      match_cluster = re.search(r"_(C\d+)_", nome_rota)
+      status_traduzido = traduzir_status_meli(item["status_bruto"], int_col)
+      match_cluster = re.search(r"_(C\d+)_", item["nome_rota"])
       cluster = match_cluster.group(1) if match_cluster else "Sem Cluster"
 
-      resultados.append({
-          "id_rota": id_rota,
-          "nome_rota": nome_rota,
+      formatados.append({
+          "id_rota": item["id_rota"],
+          "nome_rota": item["nome_rota"],
           "cluster": cluster,
-          "horario": horario,
-          "motorista": motorista,
-          "placa": placa,
+          "horario": item["horario"],
+          "motorista": item["motorista"],
+          "placa": item["placa"],
           "status": status_traduzido,
           "estimado_total": str(int_est),
           "coletado_geral": str(int_col),
           "restante": restante,
           "data": data_hoje_str,
       })
+    return formatados
   except Exception:
-    pass
-  return resultados
+    return []
+
+
+def avancar_botao_proximo_meli(page, assinatura_antes: str) -> bool:
+  """Verifica se o botão <span class='andes-pagination__arrow-title'>Próximo</span> está disponível, clica e aguarda a nova página"""
+  pulsar_watchdog()
+  try:
+    # Verifica no DOM se o botão Próximo existe e NÃO está desabilitado
+    tem_proximo = page.evaluate("""() => {
+            const spanProx = Array.from(document.querySelectorAll('span.andes-pagination__arrow-title')).find(
+                el => (el.textContent || '').trim() === 'Próximo'
+            );
+            const liNext = document.querySelector('li.andes-pagination__button--next') || (spanProx ? spanProx.closest('li') : null);
+            if (!liNext) return false;
+            if (liNext.classList.contains('andes-pagination__button--disabled')) return false;
+
+            const link = liNext.querySelector('a, button') || (spanProx ? spanProx.closest('a, button') : null);
+            if (!link) return false;
+            if (link.getAttribute('aria-disabled') === 'true' || link.disabled) return false;
+
+            const rect = link.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        }""")
+
+    if not tem_proximo:
+      return False
+
+    # Rola até o botão Próximo e clica
+    seletores_proximo = [
+        (
+            "li.andes-pagination__button--next:not(.andes-pagination__button--disabled)"
+            ' a[data-andes-pagination-control="next"]'
+        ),
+        (
+            "li.andes-pagination__button--next:not(.andes-pagination__button--disabled)"
+            ' a:has(span.andes-pagination__arrow-title:has-text("Próximo"))'
+        ),
+        (
+            "li.andes-pagination__button--next:not(.andes-pagination__button--disabled)"
+            " a"
+        ),
+        'span.andes-pagination__arrow-title:has-text("Próximo")',
+    ]
+
+    clicou = False
+    for sel in seletores_proximo:
+      loc = page.locator(sel).first
+      if loc.count() > 0 and loc.is_visible():
+        try:
+          loc.scroll_into_view_if_needed()
+          time.sleep(0.3)
+          loc.click(timeout=8000)
+          clicou = True
+          break
+        except Exception:
+          try:
+            loc.click(force=True, timeout=5000)
+            clicou = True
+            break
+          except Exception:
+            pass
+
+    if not clicou:
+      return False
+
+    # Aguarda até 15s a lista trocar os IDs (garante que a nova página carregou de verdade)
+    fim_espera = time.time() + 15.0
+    while time.time() < fim_espera:
+      pulsar_watchdog()
+      time.sleep(0.4)
+      spinners = page.locator(
+          ".andes-spinner:visible, .andes-skeleton:visible,"
+          ' [aria-busy="true"]:visible'
+      ).count()
+      if spinners > 0:
+        continue
+      nova_assinatura = obter_assinatura_pagina_atual(page)
+      if nova_assinatura and nova_assinatura != assinatura_antes:
+        time.sleep(0.5)
+        return True
+
+    aguardar_carregamento_meli(page, tempo_max=8)
+    return True
+  except Exception:
+    return False
+
+
+def salvar_rotas_no_banco(dados_raspados, hub_alvo):
+  """Atualiza a tabela rotas_monitoramento preservando monitores, observações e edições manuais"""
+  log_painel(
+      f"📦 {hub_alvo}: {len(dados_raspados)} rota(s) capturada(s)! Atualizando"
+      " planilha..."
+  )
+  df_novo = pd.DataFrame(dados_raspados)
+  try:
+    insp = inspect(motor_db)
+
+    if insp.has_table("rotas_monitoramento"):
+      df_antigo = pd.read_sql_table("rotas_monitoramento", con=motor_db)
+      for col_extra in [
+          "monitor",
+          "status_manual",
+          "restante",
+          "ocorrencia",
+          "revertido",
+          "observacoes",
+          "cores_customizadas",
+      ]:
+        if col_extra not in df_antigo.columns:
+          df_antigo[col_extra] = ""
+
+      df_antigo["id_rota"] = df_antigo["id_rota"].astype(str)
+      df_novo["id_rota"] = df_novo["id_rota"].astype(str)
+
+      df_antigo = df_antigo.drop_duplicates(subset=["id_rota"], keep="last")
+      df_novo = df_novo.drop_duplicates(subset=["id_rota"], keep="last")
+
+      data_hoje = pd.Timestamp.now().strftime("%d/%m/%Y")
+      df_antigo_passado = df_antigo[df_antigo["data"] != data_hoje].copy()
+      df_antigo_hoje = df_antigo[df_antigo["data"] == data_hoje].copy()
+
+      mapa_monitores = {}
+      for _, row_ant in df_antigo_hoje.iterrows():
+        mon_val = str(row_ant.get("monitor", "") or "").upper().strip()
+        clus_val = str(row_ant.get("cluster", "") or "").upper().strip()
+        hub_val = (
+            str(row_ant.get("nome_rota", "") or "").split("_")[0].upper().strip()
+        )
+        if mon_val and clus_val and clus_val != "SEM CLUSTER":
+          mapa_monitores[(hub_val, clus_val)] = mon_val
+
+      df_antigo_hoje.set_index("id_rota", inplace=True)
+      df_novo.set_index("id_rota", inplace=True)
+
+      indices_comuns = df_antigo_hoje.index.intersection(df_novo.index)
+      for idx in indices_comuns:
+        h_antigo = str(df_antigo_hoje.at[idx, "horario"]).upper().strip()
+        h_novo = str(df_novo.at[idx, "horario"]).upper().strip()
+        is_antigo_bom = (
+            h_antigo not in ["SEM HORÁRIO", "NAN", ""]
+            and "ATA" not in h_antigo
+            and "ETA" not in h_antigo
+        )
+        is_novo_ruim = (
+            "ATA" in h_novo
+            or "ETA" in h_novo
+            or h_novo in ["SEM HORÁRIO", ""]
+        )
+        if is_antigo_bom and is_novo_ruim:
+          df_novo.at[idx, "horario"] = df_antigo_hoje.at[idx, "horario"]
+
+        c_antigo = str(df_antigo_hoje.at[idx, "cluster"]).strip()
+        c_novo = str(df_novo.at[idx, "cluster"]).strip()
+        if (
+            c_antigo
+            and c_antigo.upper() != "SEM CLUSTER"
+            and c_novo.upper() == "SEM CLUSTER"
+        ):
+          df_novo.at[idx, "cluster"] = c_antigo
+
+        p_antiga = str(df_antigo_hoje.at[idx, "placa"]).strip()
+        p_nova = str(df_novo.at[idx, "placa"]).strip()
+        if p_antiga and p_antiga.upper() != "NAN" and not p_nova:
+          df_novo.at[idx, "placa"] = p_antiga
+
+        st_antigo = str(df_antigo_hoje.at[idx, "status"] or "").upper().strip()
+        foi_manual = (
+            str(df_antigo_hoje.at[idx, "status_manual"] or "").upper().strip()
+            == "SIM"
+        )
+        status_exclusivo_manual = st_antigo in ["DECLÍNIO", "DECLINIO"]
+
+        if foi_manual or status_exclusivo_manual:
+          df_novo.at[idx, "status"] = st_antigo
+
+      colunas_atualizar = [
+          "nome_rota",
+          "cluster",
+          "status",
+          "horario",
+          "motorista",
+          "placa",
+          "estimado_total",
+          "coletado_geral",
+          "restante",
+      ]
+      col_presentes = [
+          col
+          for col in colunas_atualizar
+          if col in df_antigo_hoje.columns and col in df_novo.columns
+      ]
+
+      df_antigo_hoje.update(df_novo[col_presentes])
+
+      rotas_novas = df_novo[~df_novo.index.isin(df_antigo_hoje.index)].copy()
+
+      if not rotas_novas.empty:
+        monitores_novas = []
+        for _, r_nova in rotas_novas.iterrows():
+          h_n = (
+              str(r_nova.get("nome_rota", "") or "")
+              .split("_")[0]
+              .upper()
+              .strip()
+          )
+          c_n = str(r_nova.get("cluster", "") or "").upper().strip()
+          monitores_novas.append(mapa_monitores.get((h_n, c_n), ""))
+        rotas_novas["monitor"] = monitores_novas
+        rotas_novas["status_manual"] = ""
+        rotas_novas["ocorrencia"] = ""
+
+      df_antigo_hoje.reset_index(inplace=True)
+      rotas_novas.reset_index(inplace=True)
+
+      df_final = pd.concat(
+          [df_antigo_passado, df_antigo_hoje, rotas_novas], ignore_index=True
+      )
+      df_final.to_sql(
+          "rotas_monitoramento", con=motor_db, if_exists="replace", index=False
+      )
+    else:
+      df_novo["monitor"] = ""
+      df_novo["status_manual"] = ""
+      df_novo["ocorrencia"] = ""
+      df_novo.to_sql(
+          "rotas_monitoramento", con=motor_db, if_exists="replace", index=False
+      )
+
+  except Exception as e:
+    log_painel(f"⚠️ Erro ao cruzar dados antigos: {e}")
 
 
 def executar_raspagem(page, hub_alvo):
+  mapa_acumulado_tentativas = {}
+
   for tentativa in range(2):
     try:
       log_painel(
@@ -786,13 +1093,14 @@ def executar_raspagem(page, hub_alvo):
           f" {tentativa+1}/2)..."
       )
 
+      # Na 2ª tentativa (ou se estiver fora da página), recarrega a página do zero como solicitado
       if tentativa > 0 or "first-mile/monitoring" not in (page.url or ""):
         page.goto(
             "https://envios.adminml.com/logistics/first-mile/monitoring",
             wait_until="domcontentloaded",
             timeout=60000,
         )
-        aguardar_carregamento_meli(page, tempo_max=12)
+        aguardar_carregamento_meli(page, tempo_max=15)
       else:
         time.sleep(2)
 
@@ -804,7 +1112,7 @@ def executar_raspagem(page, hub_alvo):
             wait_until="domcontentloaded",
             timeout=60000,
         )
-        aguardar_carregamento_meli(page, tempo_max=12)
+        aguardar_carregamento_meli(page, tempo_max=15)
 
       # 1. Sempre limpa todos os filtros antes de começar
       clicar_limpar_todos_filtros(page)
@@ -888,6 +1196,28 @@ def executar_raspagem(page, hub_alvo):
             "🌎 Filtros limpos! Raspando TODAS as rotas disponíveis no sistema."
         )
 
+      # Aguarda estabilizar o contador de rotas (<p class="item-content__value">)
+      aguardar_carregamento_meli(page, tempo_max=10)
+      total_esperado = obter_total_rotas_painel_meli(page)
+      if total_esperado >= 0:
+        log_painel(
+            f"📊 Painel do Mercado Livre informa: {total_esperado} rota(s) para"
+            f" {hub_alvo}."
+        )
+
+      if total_esperado == 0:
+        if tentativa == 0:
+          log_painel(
+              f"⏳ {hub_alvo}: Painel indica 0 rotas na 1ª verificação."
+              " Realizando confirmação de segurança..."
+          )
+          continue
+        log_painel(
+            f"ℹ️ {hub_alvo}: Nenhuma rota encontrada na tela após confirmação"
+            " (0 rotas)."
+        )
+        return True
+
       parar_aviso_raspagem = threading.Event()
 
       def loop_aviso_raspando():
@@ -898,238 +1228,72 @@ def executar_raspagem(page, hub_alvo):
       thread_aviso = threading.Thread(target=loop_aviso_raspando, daemon=True)
       thread_aviso.start()
 
-      mapa_rotas_capturadas = {}
+      mapa_rotas_tentativa = {}
       pagina_atual = 1
-      seletor_cards = (
-          "div.list div.monitoring-row, div.monitoring-row,"
-          " div.monitoring-row-higher"
-      )
+      seletor_cards = "div.list > div.monitoring-row, div.monitoring-row"
       data_hoje_str = pd.Timestamp.now().strftime("%d/%m/%Y")
 
       try:
-        while True:
+        while pagina_atual <= 150:
           pulsar_watchdog()
-          # PROTEÇÃO: wait_for_selector dentro do try/except interno (como no backup funcional)
-          # Se o HUB tiver 0 rotas, não lança exceção fatal e cai normalmente na confirmação de 0 rotas!
           try:
             page.wait_for_selector(seletor_cards, timeout=18000)
-            time.sleep(1.0)
+          except Exception:
+            break
 
-            # Rola a página gradualmente caso existam muitos cards na mesma página
-            for _ in range(4):
-              lote = extrair_cards_locators_playwright(
-                  page, hub_alvo, data_hoje_str
-              )
-              for item in lote:
-                mapa_rotas_capturadas[item["id_rota"]] = item
-              page.evaluate("window.scrollBy(0, 700)")
-              time.sleep(0.3)
-
-            lote_final_pag = extrair_cards_locators_playwright(
-                page, hub_alvo, data_hoje_str
-            )
-            for item in lote_final_pag:
-              mapa_rotas_capturadas[item["id_rota"]] = item
+          # Rola até o final da lista e volta ao topo rápido para garantir que todos os elementos da página hidrataram
+          try:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(0.4)
           except Exception:
             pass
 
-          botao_proximo = page.locator(
-              'a[role="link"]:has-text("Próximo"), button:has-text("Próximo"),'
-              " .andes-pagination__button--next a,"
-              " .andes-pagination__button--next button"
-          ).first
-          if botao_proximo.count() > 0 and botao_proximo.is_visible():
-            parent_li = botao_proximo.locator("..")
-            classes_pai = (parent_li.get_attribute("class") or "").lower()
-            aria_dis = (
-                botao_proximo.get_attribute("aria-disabled") or ""
-            ).lower()
-            if (
-                "disabled" not in classes_pai
-                and aria_dis != "true"
-                and not botao_proximo.is_disabled()
-            ):
-              try:
-                botao_proximo.scroll_into_view_if_needed()
-                botao_proximo.click(timeout=8000)
-                aguardar_carregamento_meli(page, tempo_max=12)
-                pagina_atual += 1
-                continue
-              except Exception:
-                break
+          assinatura_antes = obter_assinatura_pagina_atual(page)
+          lote_pagina = extrair_cards_pagina_js(page, hub_alvo, data_hoje_str)
+
+          for item in lote_pagina:
+            mapa_rotas_tentativa[item["id_rota"]] = item
+            mapa_acumulado_tentativas[item["id_rota"]] = item
+
+          # Avança clicando em <span class="andes-pagination__arrow-title">Próximo</span>
+          # Quando não existir mais ou estiver desabilitado, encerra a paginação!
+          if avancar_botao_proximo_meli(page, assinatura_antes):
+            pagina_atual += 1
+            continue
           break
       finally:
         parar_aviso_raspagem.set()
 
-      dados_raspados = list(mapa_rotas_capturadas.values())
+      qtd_capturada = len(mapa_rotas_tentativa)
 
-      if dados_raspados:
-        log_painel(
-            f"📦 {hub_alvo}: {len(dados_raspados)} rota(s) capturada(s)!"
-            " Atualizando planilha..."
-        )
-        df_novo = pd.DataFrame(dados_raspados)
-        try:
-          insp = inspect(motor_db)
+      # Verifica se a quantidade raspada bate com <p class="item-content__value">242</p>
+      if total_esperado > 0 and qtd_capturada < total_esperado:
+        if tentativa == 0:
+          log_painel(
+              "⚠️ Quantidade raspada divergente"
+              f" ({qtd_capturada}/{total_esperado}), realizando outra tentativa"
+          )
+          continue
+        else:
+          log_painel(
+              "⚠️ Quantidade de rotas divergentes em 2 tentativas"
+              f" ({len(mapa_acumulado_tentativas)}/{total_esperado}),"
+              " atualizando planilha com a quantidade raspada"
+          )
+          dados_finais = list(mapa_acumulado_tentativas.values())
+          if dados_finais:
+            salvar_rotas_no_banco(dados_finais, hub_alvo)
+          return True
 
-          if insp.has_table("rotas_monitoramento"):
-            df_antigo = pd.read_sql_table("rotas_monitoramento", con=motor_db)
-            for col_extra in [
-                "monitor",
-                "status_manual",
-                "restante",
-                "ocorrencia",
-                "revertido",
-                "observacoes",
-                "cores_customizadas",
-            ]:
-              if col_extra not in df_antigo.columns:
-                df_antigo[col_extra] = ""
-
-            df_antigo["id_rota"] = df_antigo["id_rota"].astype(str)
-            df_novo["id_rota"] = df_novo["id_rota"].astype(str)
-
-            df_antigo = df_antigo.drop_duplicates(
-                subset=["id_rota"], keep="last"
-            )
-            df_novo = df_novo.drop_duplicates(subset=["id_rota"], keep="last")
-
-            data_hoje = pd.Timestamp.now().strftime("%d/%m/%Y")
-            df_antigo_passado = df_antigo[df_antigo["data"] != data_hoje].copy()
-            df_antigo_hoje = df_antigo[df_antigo["data"] == data_hoje].copy()
-
-            mapa_monitores = {}
-            for _, row_ant in df_antigo_hoje.iterrows():
-              mon_val = str(row_ant.get("monitor", "") or "").upper().strip()
-              clus_val = str(row_ant.get("cluster", "") or "").upper().strip()
-              hub_val = (
-                  str(row_ant.get("nome_rota", "") or "")
-                  .split("_")[0]
-                  .upper()
-                  .strip()
-              )
-              if mon_val and clus_val and clus_val != "SEM CLUSTER":
-                mapa_monitores[(hub_val, clus_val)] = mon_val
-
-            df_antigo_hoje.set_index("id_rota", inplace=True)
-            df_novo.set_index("id_rota", inplace=True)
-
-            indices_comuns = df_antigo_hoje.index.intersection(df_novo.index)
-            for idx in indices_comuns:
-              h_antigo = str(df_antigo_hoje.at[idx, "horario"]).upper().strip()
-              h_novo = str(df_novo.at[idx, "horario"]).upper().strip()
-              is_antigo_bom = (
-                  h_antigo not in ["SEM HORÁRIO", "NAN", ""]
-                  and "ATA" not in h_antigo
-                  and "ETA" not in h_antigo
-              )
-              is_novo_ruim = (
-                  "ATA" in h_novo
-                  or "ETA" in h_novo
-                  or h_novo in ["SEM HORÁRIO", ""]
-              )
-              if is_antigo_bom and is_novo_ruim:
-                df_novo.at[idx, "horario"] = df_antigo_hoje.at[idx, "horario"]
-
-              c_antigo = str(df_antigo_hoje.at[idx, "cluster"]).strip()
-              c_novo = str(df_novo.at[idx, "cluster"]).strip()
-              if (
-                  c_antigo
-                  and c_antigo.upper() != "SEM CLUSTER"
-                  and c_novo.upper() == "SEM CLUSTER"
-              ):
-                df_novo.at[idx, "cluster"] = c_antigo
-
-              p_antiga = str(df_antigo_hoje.at[idx, "placa"]).strip()
-              p_nova = str(df_novo.at[idx, "placa"]).strip()
-              if p_antiga and p_antiga.upper() != "NAN" and not p_nova:
-                df_novo.at[idx, "placa"] = p_antiga
-
-              st_antigo = (
-                  str(df_antigo_hoje.at[idx, "status"] or "").upper().strip()
-              )
-              foi_manual = (
-                  str(df_antigo_hoje.at[idx, "status_manual"] or "")
-                  .upper()
-                  .strip()
-                  == "SIM"
-              )
-              status_exclusivo_manual = st_antigo in ["DECLÍNIO", "DECLINIO"]
-
-              if foi_manual or status_exclusivo_manual:
-                df_novo.at[idx, "status"] = st_antigo
-
-            colunas_atualizar = [
-                "nome_rota",
-                "cluster",
-                "status",
-                "horario",
-                "motorista",
-                "placa",
-                "estimado_total",
-                "coletado_geral",
-                "restante",
-            ]
-            col_presentes = [
-                col
-                for col in colunas_atualizar
-                if col in df_antigo_hoje.columns and col in df_novo.columns
-            ]
-
-            df_antigo_hoje.update(df_novo[col_presentes])
-
-            rotas_novas = df_novo[
-                ~df_novo.index.isin(df_antigo_hoje.index)
-            ].copy()
-
-            if not rotas_novas.empty:
-              monitores_novas = []
-              for _, r_nova in rotas_novas.iterrows():
-                h_n = (
-                    str(r_nova.get("nome_rota", "") or "")
-                    .split("_")[0]
-                    .upper()
-                    .strip()
-                )
-                c_n = str(r_nova.get("cluster", "") or "").upper().strip()
-                monitores_novas.append(mapa_monitores.get((h_n, c_n), ""))
-              rotas_novas["monitor"] = monitores_novas
-              rotas_novas["status_manual"] = ""
-              rotas_novas["ocorrencia"] = ""
-
-            df_antigo_hoje.reset_index(inplace=True)
-            rotas_novas.reset_index(inplace=True)
-
-            df_final = pd.concat(
-                [df_antigo_passado, df_antigo_hoje, rotas_novas],
-                ignore_index=True,
-            )
-            df_final.to_sql(
-                "rotas_monitoramento",
-                con=motor_db,
-                if_exists="replace",
-                index=False,
-            )
-          else:
-            df_novo["monitor"] = ""
-            df_novo["status_manual"] = ""
-            df_novo["ocorrencia"] = ""
-            df_novo.to_sql(
-                "rotas_monitoramento",
-                con=motor_db,
-                if_exists="replace",
-                index=False,
-            )
-
-        except Exception as e:
-          log_painel(f"⚠️ Erro ao cruzar dados antigos: {e}")
-
+      # Quantidade bateu perfeitamente (ou superou caso tenha entrado rota nova durante a leitura)
+      dados_finais = list(mapa_rotas_tentativa.values())
+      if dados_finais:
+        salvar_rotas_no_banco(dados_finais, hub_alvo)
         return True
       else:
         if tentativa == 0:
           log_painel(
-              f"⏳ {hub_alvo}: 0 rotas lidas na 1ª verificação. Realizando"
-              " confirmação de segurança..."
+              "⚠️ Quantidade raspada divergente, realizando outra tentativa"
           )
           continue
         log_painel(
@@ -1147,11 +1311,20 @@ def executar_raspagem(page, hub_alvo):
       )
       time.sleep(3)
 
+  # Se chegou aqui após 2 tentativas mas havia capturado rotas parciais, salva o que capturou
+  if mapa_acumulado_tentativas:
+    log_painel(
+        "⚠️ Quantidade de rotas divergentes em 2 tentativas, atualizando"
+        " planilha com a quantidade raspada"
+    )
+    salvar_rotas_no_banco(list(mapa_acumulado_tentativas.values()), hub_alvo)
+    return True
+
   return False
 
 
 # ==========================================
-# MÓDULO 2: DOWNLOAD DE RELATÓRIO (RESTAURADO DO BACKUP FUNCIONAL)
+# MÓDULO 2: DOWNLOAD DE RELATÓRIO
 # ==========================================
 def executar_relatorio(page, lista_hubs, ticket):
   for tentativa in range(2):
@@ -1604,7 +1777,6 @@ def iniciar_orquestrador():
                   tarefas_desde_ultimo_reset += 1
                   break
                 elif tipo_ticket == "avulso":
-                  # Evita que um ticket avulso com falha bloqueie a fila de rotinas infinitamente
                   log_painel(
                       f"⚠️ Finalizando ticket avulso ({hub_string}) após 2"
                       " tentativas sem sucesso para liberar a fila."
