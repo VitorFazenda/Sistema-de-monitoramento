@@ -827,15 +827,33 @@ class RevertidoEditor {
 // GRELHA DE ROTAS (SEM OCORRÊNCIA E PONTUALIDADE)
 // ==========================================
 function pintarCelulaFocada(cor) {
-    ultimaCorEscolhida = cor; document.getElementById("colorMenu").classList.remove("show");
+    ultimaCorEscolhida = cor;
+    document.getElementById("colorMenu").classList.remove("show");
     if (!celulaAtualFocada) return; 
     const rN = gridApi.getDisplayedRowAtIndex(celulaAtualFocada.rowIndex), cI = celulaAtualFocada.column.getId();
     if (rN && podeEditarLinha(rN.data)) {
         let oC = (rN.data.coresIndividuais && rN.data.coresIndividuais[cI]) ? rN.data.coresIndividuais[cI] : null;
-        if (!isUndoRedoAction && oC !== cor) { undoStack.push({ type: 'color', id_rota: rN.data.id_rota, colId: cI, oldVal: oC, newVal: cor }); if(undoStack.length > 50) undoStack.shift(); }
-        if (!rN.data.coresIndividuais) rN.data.coresIndividuais = {}; rN.data.coresIndividuais[cI] = cor;
+        if (!isUndoRedoAction && oC !== cor) {
+            undoStack.push({ type: 'color', id_rota: rN.data.id_rota, colId: cI, oldVal: oC, newVal: cor });
+            if (undoStack.length > 50) undoStack.shift();
+        }
+        if (!rN.data.coresIndividuais) rN.data.coresIndividuais = {};
+        if (!cor || cor.toLowerCase() === '#ffffff') {
+            delete rN.data.coresIndividuais[cI];
+        } else {
+            rN.data.coresIndividuais[cI] = cor;
+        }
+        rotasGlobais.forEach(r => {
+            if (String(r.id_rota) === String(rN.data.id_rota)) {
+                r.coresIndividuais = { ...(rN.data.coresIndividuais || {}) };
+            }
+        });
         gridApi.refreshCells({ rowNodes: [rN], columns: [cI], force: true });
-        fetch(`${API_BASE_URL}/atualizar_cor`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id_rota: rN.data.id_rota, coluna: cI, cor: cor }) });
+        fetch(`${API_BASE_URL}/atualizar_cor`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id_rota: rN.data.id_rota, coluna: cI, cor: cor })
+        });
     }
 }
 const LISTA_OCORRENCIAS_PADRAO = [
@@ -951,26 +969,68 @@ const gridOptions = {
         if (e.ctrlKey && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); desfazerAcao(); }
         if (e.ctrlKey && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); if (ultimaCorEscolhida) pintarCelulaFocada(ultimaCorEscolhida); }
     },
+    
     onCellValueChanged: p => {
-        if (!isUndoRedoAction && p.oldValue !== p.newValue) { undoStack.push({ type: 'edit', id_rota: p.data.id_rota, colId: p.colDef.field, oldVal: p.oldValue, newVal: p.newValue }); if(undoStack.length > 50) undoStack.shift(); }
-        let ep = ""; let bL = { id_rota: p.data.id_rota };
+        if (!isUndoRedoAction && p.oldValue !== p.newValue) {
+            undoStack.push({ type: 'edit', id_rota: p.data.id_rota, colId: p.colDef.field, oldVal: p.oldValue, newVal: p.newValue });
+            if (undoStack.length > 50) undoStack.shift();
+        }
+        let ep = "";
+        let bL = { id_rota: p.data.id_rota };
+        const idAlvo = String(p.data.id_rota);
+
         if (p.colDef.field === 'cluster') { 
-            ep = "atualizar_cluster"; let cF = String(p.newValue || "").toUpperCase().trim(); if (!cF || cF === "SEM CLUSTER") cF = "Sem Cluster";
-            p.data.cluster = cF; bL.novo_cluster = cF; let mA = buscarMonitorDoCluster(cF, p.data.data, p.data.nome_rota); p.data.monitor = mA; bL.monitor = mA;
-            rotasGlobais.forEach(r => { if (String(r.id_rota) === String(p.data.id_rota)) { r.cluster = cF; r.monitor = mA; } });
-            rotasGlobais = ordenarRotasPorSequencia(rotasGlobais); aplicarFiltroHubPlanilha(); inicializarEscala();
-        } else if (p.colDef.field === 'observacoes') { ep = "atualizar_observacao"; bL.observacao = p.newValue; }
-        else if (p.colDef.field === 'ocorrencia') {
-            ep = "atualizar_ocorrencia"; bL.ocorrencia = p.newValue;
-            rotasGlobais.forEach(r => { if (String(r.id_rota) === String(p.data.id_rota)) r.ocorrencia = p.newValue; });
-        }
-        else if (p.colDef.field === 'revertido') {
-            ep = "atualizar_revertido"; bL.revertido = p.newValue;
-            rotasGlobais.forEach(r => { if (String(r.id_rota) === String(p.data.id_rota)) r.revertido = p.newValue; });
+            ep = "atualizar_cluster";
+            let cF = String(p.newValue || "").toUpperCase().trim();
+            if (!cF || cF === "SEM CLUSTER") cF = "Sem Cluster";
+            p.data.cluster = cF;
+            bL.novo_cluster = cF;
+            let mA = buscarMonitorDoCluster(cF, p.data.data, p.data.nome_rota);
+            p.data.monitor = mA;
+            bL.monitor = mA;
+            rotasGlobais.forEach(r => { if (String(r.id_rota) === idAlvo) { r.cluster = cF; r.monitor = mA; } });
+            rotasGlobais = ordenarRotasPorSequencia(rotasGlobais);
+            aplicarFiltroHubPlanilha();
+            inicializarEscala();
+        } else if (p.colDef.field === 'observacoes') {
+            ep = "atualizar_observacao";
+            bL.observacao = p.newValue;
+            rotasGlobais.forEach(r => { if (String(r.id_rota) === idAlvo) r.observacoes = p.newValue; });
+        } else if (p.colDef.field === 'ocorrencia') {
+            ep = "atualizar_ocorrencia";
+            bL.ocorrencia = p.newValue;
+            rotasGlobais.forEach(r => { if (String(r.id_rota) === idAlvo) r.ocorrencia = p.newValue; });
+        } else if (p.colDef.field === 'revertido') {
+            ep = "atualizar_revertido";
+            bL.revertido = p.newValue;
+            rotasGlobais.forEach(r => { if (String(r.id_rota) === idAlvo) r.revertido = p.newValue; });
             if (rotasBrutas.length > 0) aplicarFiltroUnificadoEstatisticas();
+        } else if (p.colDef.field === 'status') {
+            ep = "atualizar_status";
+            bL.status = p.newValue;
+            rotasGlobais.forEach(r => { if (String(r.id_rota) === idAlvo) { r.status = p.newValue; r.status_manual = "SIM"; } });
+        } else if (p.colDef.field === 'estimado_total' || p.colDef.field === 'coletado_geral') {
+            ep = "atualizar_pacotes_manual";
+            bL.coluna = p.colDef.field;
+            bL.valor = p.newValue;
+            const novoRestante = String((parseFloat(p.data.estimado_total) || 0) - (parseFloat(p.data.coletado_geral) || 0));
+            p.data.restante = novoRestante;
+            rotasGlobais.forEach(r => {
+                if (String(r.id_rota) === idAlvo) {
+                    r[p.colDef.field] = p.newValue;
+                    r.restante = novoRestante;
+                }
+            });
+            gridApi.refreshCells({ rowNodes: [p.node], columns: ['restante'], force: true });
         }
-        else if (p.colDef.field === 'status') { ep = "atualizar_status"; bL.status = p.newValue; }
-        if(ep !== "") fetch(`${API_BASE_URL}/${ep}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(bL) }).catch(e => console.error(e));
+
+        if (ep !== "") {
+            fetch(`${API_BASE_URL}/${ep}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(bL)
+            }).catch(e => console.error(e));
+        }
     }
 };
 

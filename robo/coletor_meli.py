@@ -36,6 +36,8 @@ HEADLESS_MODE = os.getenv("HEADLESS_MODE", "False").lower() in (
     "t",
 )
 
+FUSO_BR = datetime.timezone(datetime.timedelta(hours=-3))
+
 # ==========================================
 # MAPEAMENTO SEGURO DE CONTAS
 # ==========================================
@@ -579,7 +581,7 @@ def traduzir_status_meli(status_bruto: str, coletados_int: int) -> str:
 
 
 # ==========================================
-# MÓDULO 1: RASPAGEM DE MONITORAMENTO (ALTA PRECISÃO)
+# MÓDULO 1: RASPAGEM DE MONITORAMENTO (ALTA PRECISÃO + PROTEÇÃO DE EDIÇÕES MANUAIS)
 # ==========================================
 def aguardar_carregamento_meli(page, tempo_max=15):
   """Aguarda os spinners e skeletons do Mercado Livre sumirem após limpar ou aplicar filtros"""
@@ -674,14 +676,12 @@ def obter_total_rotas_painel_meli(page) -> int:
   pulsar_watchdog()
   try:
     total = page.evaluate("""() => {
-            // 1. Seletor exato da caixa de Rotas (Print 2)
             const elRoutes = document.querySelector('.stats__item--routes p.item-content__value');
             if (elRoutes) {
                 const txt = (elRoutes.textContent || '').replace(/\\D/g, '');
                 if (txt !== '') return parseInt(txt, 10);
             }
 
-            // 2. Fallback procurando o bloco .item-content cujo título seja 'Rotas'
             const blocos = Array.from(document.querySelectorAll('.stats .item-content, .stats__item .item-content'));
             for (const b of blocos) {
                 const ps = b.querySelectorAll('p');
@@ -694,7 +694,6 @@ def obter_total_rotas_painel_meli(page) -> int:
                 }
             }
 
-            // 3. Fallback primeiro p.item-content__value dentro de .stats
             const elFirst = document.querySelector('.stats p.item-content__value');
             if (elFirst) {
                 const txt = (elFirst.textContent || '').replace(/\\D/g, '');
@@ -858,7 +857,6 @@ def avancar_botao_proximo_meli(page, assinatura_antes: str) -> bool:
   """Verifica se o botão <span class='andes-pagination__arrow-title'>Próximo</span> está disponível, clica e aguarda a nova página"""
   pulsar_watchdog()
   try:
-    # Verifica no DOM se o botão Próximo existe e NÃO está desabilitado
     tem_proximo = page.evaluate("""() => {
             const spanProx = Array.from(document.querySelectorAll('span.andes-pagination__arrow-title')).find(
                 el => (el.textContent || '').trim() === 'Próximo'
@@ -878,7 +876,6 @@ def avancar_botao_proximo_meli(page, assinatura_antes: str) -> bool:
     if not tem_proximo:
       return False
 
-    # Rola até o botão Próximo e clica
     seletores_proximo = [
         (
             "li.andes-pagination__button--next:not(.andes-pagination__button--disabled)"
@@ -916,7 +913,6 @@ def avancar_botao_proximo_meli(page, assinatura_antes: str) -> bool:
     if not clicou:
       return False
 
-    # Aguarda até 15s a lista trocar os IDs (garante que a nova página carregou de verdade)
     fim_espera = time.time() + 15.0
     while time.time() < fim_espera:
       pulsar_watchdog()
@@ -938,149 +934,328 @@ def avancar_botao_proximo_meli(page, assinatura_antes: str) -> bool:
     return False
 
 
-def salvar_rotas_no_banco(dados_raspados, hub_alvo):
-  """Atualiza a tabela rotas_monitoramento preservando monitores, observações e edições manuais"""
-  log_painel(
-      f"📦 {hub_alvo}: {len(dados_raspados)} rota(s) capturada(s)! Atualizando"
-      " planilha..."
-  )
-  df_novo = pd.DataFrame(dados_raspados)
-  try:
-    insp = inspect(motor_db)
-
-    if insp.has_table("rotas_monitoramento"):
-      df_antigo = pd.read_sql_table("rotas_monitoramento", con=motor_db)
-      for col_extra in [
-          "monitor",
-          "status_manual",
-          "restante",
-          "ocorrencia",
-          "revertido",
-          "observacoes",
-          "cores_customizadas",
-      ]:
-        if col_extra not in df_antigo.columns:
-          df_antigo[col_extra] = ""
-
-      df_antigo["id_rota"] = df_antigo["id_rota"].astype(str)
-      df_novo["id_rota"] = df_novo["id_rota"].astype(str)
-
-      df_antigo = df_antigo.drop_duplicates(subset=["id_rota"], keep="last")
-      df_novo = df_novo.drop_duplicates(subset=["id_rota"], keep="last")
-
-      data_hoje = pd.Timestamp.now().strftime("%d/%m/%Y")
-      df_antigo_passado = df_antigo[df_antigo["data"] != data_hoje].copy()
-      df_antigo_hoje = df_antigo[df_antigo["data"] == data_hoje].copy()
-
-      mapa_monitores = {}
-      for _, row_ant in df_antigo_hoje.iterrows():
-        mon_val = str(row_ant.get("monitor", "") or "").upper().strip()
-        clus_val = str(row_ant.get("cluster", "") or "").upper().strip()
-        hub_val = (
-            str(row_ant.get("nome_rota", "") or "").split("_")[0].upper().strip()
-        )
-        if mon_val and clus_val and clus_val != "SEM CLUSTER":
-          mapa_monitores[(hub_val, clus_val)] = mon_val
-
-      df_antigo_hoje.set_index("id_rota", inplace=True)
-      df_novo.set_index("id_rota", inplace=True)
-
-      indices_comuns = df_antigo_hoje.index.intersection(df_novo.index)
-      for idx in indices_comuns:
-        h_antigo = str(df_antigo_hoje.at[idx, "horario"]).upper().strip()
-        h_novo = str(df_novo.at[idx, "horario"]).upper().strip()
-        is_antigo_bom = (
-            h_antigo not in ["SEM HORÁRIO", "NAN", ""]
-            and "ATA" not in h_antigo
-            and "ETA" not in h_antigo
-        )
-        is_novo_ruim = (
-            "ATA" in h_novo
-            or "ETA" in h_novo
-            or h_novo in ["SEM HORÁRIO", ""]
-        )
-        if is_antigo_bom and is_novo_ruim:
-          df_novo.at[idx, "horario"] = df_antigo_hoje.at[idx, "horario"]
-
-        c_antigo = str(df_antigo_hoje.at[idx, "cluster"]).strip()
-        c_novo = str(df_novo.at[idx, "cluster"]).strip()
-        if (
-            c_antigo
-            and c_antigo.upper() != "SEM CLUSTER"
-            and c_novo.upper() == "SEM CLUSTER"
-        ):
-          df_novo.at[idx, "cluster"] = c_antigo
-
-        p_antiga = str(df_antigo_hoje.at[idx, "placa"]).strip()
-        p_nova = str(df_novo.at[idx, "placa"]).strip()
-        if p_antiga and p_antiga.upper() != "NAN" and not p_nova:
-          df_novo.at[idx, "placa"] = p_antiga
-
-        st_antigo = str(df_antigo_hoje.at[idx, "status"] or "").upper().strip()
-        foi_manual = (
-            str(df_antigo_hoje.at[idx, "status_manual"] or "").upper().strip()
-            == "SIM"
-        )
-        status_exclusivo_manual = st_antigo in ["DECLÍNIO", "DECLINIO"]
-
-        if foi_manual or status_exclusivo_manual:
-          df_novo.at[idx, "status"] = st_antigo
-
-      colunas_atualizar = [
-          "nome_rota",
-          "cluster",
-          "status",
-          "horario",
-          "motorista",
-          "placa",
-          "estimado_total",
-          "coletado_geral",
-          "restante",
-      ]
-      col_presentes = [
-          col
-          for col in colunas_atualizar
-          if col in df_antigo_hoje.columns and col in df_novo.columns
-      ]
-
-      df_antigo_hoje.update(df_novo[col_presentes])
-
-      rotas_novas = df_novo[~df_novo.index.isin(df_antigo_hoje.index)].copy()
-
-      if not rotas_novas.empty:
-        monitores_novas = []
-        for _, r_nova in rotas_novas.iterrows():
-          h_n = (
-              str(r_nova.get("nome_rota", "") or "")
-              .split("_")[0]
-              .upper()
-              .strip()
+def garantir_estrutura_rotas_monitoramento():
+  """Garante que a tabela rotas_monitoramento e todas as colunas de controle manual existam no PostgreSQL"""
+  with motor_db.begin() as conn:
+    conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS rotas_monitoramento (
+                id_rota TEXT,
+                nome_rota TEXT,
+                cluster TEXT,
+                horario TEXT,
+                motorista TEXT,
+                placa TEXT,
+                status TEXT,
+                estimado_total TEXT,
+                coletado_geral TEXT,
+                restante TEXT,
+                data TEXT,
+                monitor TEXT DEFAULT '',
+                status_manual TEXT DEFAULT '',
+                ocorrencia TEXT DEFAULT '',
+                revertido TEXT DEFAULT '',
+                observacoes TEXT DEFAULT '',
+                cores_customizadas TEXT DEFAULT '{}',
+                campos_manuais TEXT DEFAULT '{}'
+            )
+        """))
+    for col_extra, padrao in [
+        ("monitor", "''"),
+        ("status_manual", "''"),
+        ("restante", "''"),
+        ("ocorrencia", "''"),
+        ("revertido", "''"),
+        ("observacoes", "''"),
+        ("cores_customizadas", "'{}'"),
+        ("campos_manuais", "'{}'"),
+    ]:
+      conn.execute(
+          text(
+              "ALTER TABLE rotas_monitoramento ADD COLUMN IF NOT EXISTS"
+              f" {col_extra} TEXT DEFAULT {padrao}"
           )
-          c_n = str(r_nova.get("cluster", "") or "").upper().strip()
-          monitores_novas.append(mapa_monitores.get((h_n, c_n), ""))
-        rotas_novas["monitor"] = monitores_novas
-        rotas_novas["status_manual"] = ""
-        rotas_novas["ocorrencia"] = ""
-
-      df_antigo_hoje.reset_index(inplace=True)
-      rotas_novas.reset_index(inplace=True)
-
-      df_final = pd.concat(
-          [df_antigo_passado, df_antigo_hoje, rotas_novas], ignore_index=True
-      )
-      df_final.to_sql(
-          "rotas_monitoramento", con=motor_db, if_exists="replace", index=False
-      )
-    else:
-      df_novo["monitor"] = ""
-      df_novo["status_manual"] = ""
-      df_novo["ocorrencia"] = ""
-      df_novo.to_sql(
-          "rotas_monitoramento", con=motor_db, if_exists="replace", index=False
       )
 
+
+def salvar_rotas_no_banco(dados_raspados, hub_alvo):
+  """Atualiza rotas_monitoramento de forma atômica sem sobrescrever edições manuais ou células pintadas"""
+  if not dados_raspados:
+    return
+
+  try:
+    garantir_estrutura_rotas_monitoramento()
+    data_hoje = datetime.datetime.now(FUSO_BR).strftime("%d/%m/%Y")
+
+    with motor_db.begin() as conn:
+      res = conn.execute(text("""
+                SELECT id_rota, nome_rota, cluster, horario, motorista, placa, status,
+                       estimado_total, coletado_geral, restante, data, monitor,
+                       status_manual, ocorrencia, revertido, observacoes,
+                       cores_customizadas, campos_manuais
+                FROM rotas_monitoramento
+            """)).fetchall()
+
+      existentes = {}
+      mapa_monitores = {}
+
+      for r in res:
+        id_r = str(r[0] or "").strip()
+        if not id_r:
+          continue
+        reg = {
+            "id_rota": id_r,
+            "nome_rota": str(r[1] or "").strip(),
+            "cluster": str(r[2] or "").strip(),
+            "horario": str(r[3] or "").strip(),
+            "motorista": str(r[4] or "").strip(),
+            "placa": str(r[5] or "").strip(),
+            "status": str(r[6] or "").strip(),
+            "estimado_total": str(r[7] or "0").strip(),
+            "coletado_geral": str(r[8] or "0").strip(),
+            "restante": str(r[9] or "0").strip(),
+            "data": str(r[10] or "").strip(),
+            "monitor": str(r[11] or "").upper().strip(),
+            "status_manual": str(r[12] or "").upper().strip(),
+            "ocorrencia": str(r[13] or "").strip(),
+            "revertido": str(r[14] or "").strip(),
+            "observacoes": str(r[15] or "").strip(),
+            "cores_customizadas": str(r[16] or "{}").strip(),
+            "campos_manuais": str(r[17] or "{}").strip(),
+        }
+
+        if id_r in existentes:
+          ant = existentes[id_r]
+          for k_man in [
+              "monitor",
+              "status_manual",
+              "ocorrencia",
+              "revertido",
+              "observacoes",
+          ]:
+            if not reg[k_man] and ant[k_man]:
+              reg[k_man] = ant[k_man]
+          if (
+              reg["cores_customizadas"] in ["", "{}"]
+              and ant["cores_customizadas"] not in ["", "{}"]
+          ):
+            reg["cores_customizadas"] = ant["cores_customizadas"]
+          if (
+              reg["campos_manuais"] in ["", "{}"]
+              and ant["campos_manuais"] not in ["", "{}"]
+          ):
+            reg["campos_manuais"] = ant["campos_manuais"]
+
+        existentes[id_r] = reg
+
+        if (
+            reg["monitor"]
+            and reg["cluster"]
+            and reg["cluster"].upper() != "SEM CLUSTER"
+        ):
+          hub_prefix = reg["nome_rota"].split("_")[0].upper().strip()
+          if hub_prefix:
+            mapa_monitores[(hub_prefix, reg["cluster"].upper())] = reg[
+                "monitor"
+            ]
+
+      for item in dados_raspados:
+        id_r = str(item.get("id_rota", "")).strip()
+        if not id_r:
+          continue
+
+        if id_r in existentes:
+          ant = existentes[id_r]
+
+          try:
+            cores_dict = (
+                json.loads(ant["cores_customizadas"])
+                if ant["cores_customizadas"]
+                else {}
+            )
+            if not isinstance(cores_dict, dict):
+              cores_dict = {}
+          except Exception:
+            cores_dict = {}
+
+          try:
+            manuais_dict = (
+                json.loads(ant["campos_manuais"])
+                if ant["campos_manuais"]
+                else {}
+            )
+            if not isinstance(manuais_dict, dict):
+              manuais_dict = {}
+          except Exception:
+            manuais_dict = {}
+
+          def coluna_travada(nome_col):
+            return bool(manuais_dict.get(nome_col)) or (
+                nome_col in cores_dict
+                and str(cores_dict[nome_col]).strip()
+                not in ["", "#ffffff", "#FFFFFF", "transparent"]
+            )
+
+          # 1. Cluster
+          c_antigo = ant["cluster"]
+          c_novo = str(item.get("cluster", "Sem Cluster")).strip()
+          if coluna_travada("cluster") or (
+              c_antigo
+              and c_antigo.upper() != "SEM CLUSTER"
+              and c_novo.upper() == "SEM CLUSTER"
+          ):
+            cluster_final = c_antigo
+          else:
+            cluster_final = c_novo
+
+          # 2. Horário
+          h_antigo = ant["horario"]
+          h_novo = str(item.get("horario", "Sem Horário")).strip()
+          h_ant_up = h_antigo.upper()
+          h_nov_up = h_novo.upper()
+          is_antigo_bom = (
+              h_ant_up not in ["SEM HORÁRIO", "NAN", ""]
+              and "ATA" not in h_ant_up
+              and "ETA" not in h_ant_up
+          )
+          is_novo_ruim = (
+              "ATA" in h_nov_up
+              or "ETA" in h_nov_up
+              or h_nov_up in ["SEM HORÁRIO", ""]
+          )
+          if coluna_travada("horario") or (is_antigo_bom and is_novo_ruim):
+            horario_final = h_antigo
+          else:
+            horario_final = h_novo
+
+          # 3. Placa
+          p_antiga = ant["placa"]
+          p_nova = str(item.get("placa", "")).strip()
+          if coluna_travada("placa") or (
+              p_antiga and p_antiga.upper() != "NAN" and not p_nova
+          ):
+            placa_final = p_antiga
+          else:
+            placa_final = p_nova
+
+          # 4. Estimado Total e Coletados (respeita edição manual ou pintura)
+          est_final_str = (
+              ant["estimado_total"]
+              if coluna_travada("estimado_total")
+              else str(item.get("estimado_total", "0"))
+          )
+          col_final_str = (
+              ant["coletado_geral"]
+              if coluna_travada("coletado_geral")
+              else str(item.get("coletado_geral", "0"))
+          )
+
+          int_est = (
+              int(re.sub(r"\D", "", est_final_str))
+              if re.sub(r"\D", "", est_final_str)
+              else 0
+          )
+          int_col = (
+              int(re.sub(r"\D", "", col_final_str))
+              if re.sub(r"\D", "", col_final_str)
+              else 0
+          )
+          restante_final = str(int_est - int_col)
+
+          # 5. Status (respeita status_manual == SIM, célula pintada ou DECLÍNIO)
+          st_antigo = ant["status"].upper().strip()
+          st_novo = str(item.get("status", "PENDENTE DE LOGIN")).upper().strip()
+          foi_status_manual = (
+              ant["status_manual"] == "SIM"
+              or coluna_travada("status")
+              or st_antigo in ["DECLÍNIO", "DECLINIO"]
+          )
+          if foi_status_manual and st_antigo:
+            status_final = st_antigo
+          else:
+            status_final = st_novo
+
+          # 6. Monitor
+          hub_prefix = (
+              str(item.get("nome_rota", "")).split("_")[0].upper().strip()
+          )
+          monitor_final = ant["monitor"] or mapa_monitores.get(
+              (hub_prefix, cluster_final.upper()), ""
+          )
+
+          # Atualiza SOMENTE os dados operacionais; NUNCA sobrescreve ocorrencia, revertido, observacoes ou cores_customizadas
+          conn.execute(
+              text("""
+                        UPDATE rotas_monitoramento
+                        SET nome_rota = :nr,
+                            cluster = :cl,
+                            horario = :hr,
+                            motorista = :mt,
+                            placa = :pl,
+                            status = :st,
+                            estimado_total = :et,
+                            coletado_geral = :cg,
+                            restante = :re,
+                            monitor = :mn
+                        WHERE id_rota = :id
+                    """),
+              {
+                  "nr": str(item.get("nome_rota", "")).strip(),
+                  "cl": cluster_final,
+                  "hr": horario_final,
+                  "mt": (
+                      str(item.get("motorista", "")).strip() or ant["motorista"]
+                  ),
+                  "pl": placa_final,
+                  "st": status_final,
+                  "et": str(int_est),
+                  "cg": str(int_col),
+                  "re": restante_final,
+                  "mn": monitor_final,
+                  "id": id_r,
+              },
+          )
+        else:
+          hub_prefix = (
+              str(item.get("nome_rota", "")).split("_")[0].upper().strip()
+          )
+          clus_novo = str(item.get("cluster", "Sem Cluster")).strip()
+          mon_herdado = mapa_monitores.get((hub_prefix, clus_novo.upper()), "")
+
+          conn.execute(
+              text("""
+                        INSERT INTO rotas_monitoramento (
+                            id_rota, nome_rota, cluster, horario, motorista, placa,
+                            status, estimado_total, coletado_geral, restante, data,
+                            monitor, status_manual, ocorrencia, revertido, observacoes,
+                            cores_customizadas, campos_manuais
+                        ) VALUES (
+                            :id, :nr, :cl, :hr, :mt, :pl,
+                            :st, :et, :cg, :re, :dt,
+                            :mn, '', '', '', '', '{}', '{}'
+                        )
+                    """),
+              {
+                  "id": id_r,
+                  "nr": str(item.get("nome_rota", "")).strip(),
+                  "cl": clus_novo,
+                  "hr": str(item.get("horario", "Sem Horário")).strip(),
+                  "mt": str(item.get("motorista", "")).strip(),
+                  "pl": str(item.get("placa", "")).strip(),
+                  "st": str(item.get("status", "PENDENTE DE LOGIN")).strip(),
+                  "et": str(item.get("estimado_total", "0")).strip(),
+                  "cg": str(item.get("coletado_geral", "0")).strip(),
+                  "re": str(item.get("restante", "0")).strip(),
+                  "dt": str(item.get("data", data_hoje)).strip(),
+                  "mn": mon_herdado,
+              },
+          )
+
+    log_painel(
+        f"📦 {hub_alvo}: {len(dados_raspados)} rota(s) capturada(s)!"
+        " Atualizando planilha..."
+    )
   except Exception as e:
-    log_painel(f"⚠️ Erro ao cruzar dados antigos: {e}")
+    log_painel(f"⚠️ Erro ao salvar rotas no banco: {e}")
 
 
 def executar_raspagem(page, hub_alvo):
@@ -1093,7 +1268,6 @@ def executar_raspagem(page, hub_alvo):
           f" {tentativa+1}/2)..."
       )
 
-      # Na 2ª tentativa (ou se estiver fora da página), recarrega a página do zero como solicitado
       if tentativa > 0 or "first-mile/monitoring" not in (page.url or ""):
         page.goto(
             "https://envios.adminml.com/logistics/first-mile/monitoring",
@@ -1114,7 +1288,6 @@ def executar_raspagem(page, hub_alvo):
         )
         aguardar_carregamento_meli(page, tempo_max=15)
 
-      # 1. Sempre limpa todos os filtros antes de começar
       clicar_limpar_todos_filtros(page)
 
       if hub_alvo != "TODOS":
@@ -1196,7 +1369,6 @@ def executar_raspagem(page, hub_alvo):
             "🌎 Filtros limpos! Raspando TODAS as rotas disponíveis no sistema."
         )
 
-      # Aguarda estabilizar o contador de rotas (<p class="item-content__value">)
       aguardar_carregamento_meli(page, tempo_max=10)
       total_esperado = obter_total_rotas_painel_meli(page)
       if total_esperado >= 0:
@@ -1231,7 +1403,7 @@ def executar_raspagem(page, hub_alvo):
       mapa_rotas_tentativa = {}
       pagina_atual = 1
       seletor_cards = "div.list > div.monitoring-row, div.monitoring-row"
-      data_hoje_str = pd.Timestamp.now().strftime("%d/%m/%Y")
+      data_hoje_str = datetime.datetime.now(FUSO_BR).strftime("%d/%m/%Y")
 
       try:
         while pagina_atual <= 150:
@@ -1241,7 +1413,6 @@ def executar_raspagem(page, hub_alvo):
           except Exception:
             break
 
-          # Rola até o final da lista e volta ao topo rápido para garantir que todos os elementos da página hidrataram
           try:
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             time.sleep(0.4)
@@ -1255,8 +1426,6 @@ def executar_raspagem(page, hub_alvo):
             mapa_rotas_tentativa[item["id_rota"]] = item
             mapa_acumulado_tentativas[item["id_rota"]] = item
 
-          # Avança clicando em <span class="andes-pagination__arrow-title">Próximo</span>
-          # Quando não existir mais ou estiver desabilitado, encerra a paginação!
           if avancar_botao_proximo_meli(page, assinatura_antes):
             pagina_atual += 1
             continue
@@ -1266,7 +1435,6 @@ def executar_raspagem(page, hub_alvo):
 
       qtd_capturada = len(mapa_rotas_tentativa)
 
-      # Verifica se a quantidade raspada bate com <p class="item-content__value">242</p>
       if total_esperado > 0 and qtd_capturada < total_esperado:
         if tentativa == 0:
           log_painel(
@@ -1285,7 +1453,6 @@ def executar_raspagem(page, hub_alvo):
             salvar_rotas_no_banco(dados_finais, hub_alvo)
           return True
 
-      # Quantidade bateu perfeitamente (ou superou caso tenha entrado rota nova durante a leitura)
       dados_finais = list(mapa_rotas_tentativa.values())
       if dados_finais:
         salvar_rotas_no_banco(dados_finais, hub_alvo)
@@ -1311,7 +1478,6 @@ def executar_raspagem(page, hub_alvo):
       )
       time.sleep(3)
 
-  # Se chegou aqui após 2 tentativas mas havia capturado rotas parciais, salva o que capturou
   if mapa_acumulado_tentativas:
     log_painel(
         "⚠️ Quantidade de rotas divergentes em 2 tentativas, atualizando"
@@ -1380,7 +1546,7 @@ def executar_relatorio(page, lista_hubs, ticket):
           btn_hoje.click()
           time.sleep(0.5)
         else:
-          hoje_str = datetime.datetime.now().strftime("%Y-%m-%d")
+          hoje_str = datetime.datetime.now(FUSO_BR).strftime("%Y-%m-%d")
           btn_fallback = page.locator(f'td[data-day="{hoje_str}"] button').first
           if btn_fallback.count() > 0 and btn_fallback.is_visible():
             btn_fallback.click()
@@ -1522,7 +1688,7 @@ def executar_relatorio(page, lista_hubs, ticket):
           )
 
         df_hist = df.copy()
-        df_hist["data_extracao"] = pd.Timestamp.now().strftime(
+        df_hist["data_extracao"] = datetime.datetime.now(FUSO_BR).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
 
@@ -1571,7 +1737,7 @@ def executar_relatorio(page, lista_hubs, ticket):
           prefixo = "Global" if "TODOS" in lista_hubs else lista_hubs[0]
           nome_pc = (
               f"Relatorio_{prefixo}_"
-              f"{datetime.datetime.now().strftime('%d%m%Y_%H%M%S')}{extensao}"
+              f"{datetime.datetime.now(FUSO_BR).strftime('%d%m%Y_%H%M%S')}{extensao}"
           )
           shutil.copy(caminho_arquivo, os.path.join(pasta_export, nome_pc))
           log_painel(

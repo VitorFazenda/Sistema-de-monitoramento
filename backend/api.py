@@ -282,9 +282,9 @@ def construir_json_rotas() -> str:
         CACHE_DADOS["rotas_ts"] = time.time()
         return "[]"
 
-    for col_obrigatoria in ['monitor', 'ocorrencia', 'revertido', 'observacoes', 'restante', 'status_manual']:
+    for col_obrigatoria in ['monitor', 'ocorrencia', 'revertido', 'observacoes', 'restante', 'status_manual', 'cores_customizadas', 'campos_manuais']:
         if col_obrigatoria not in df.columns:
-            df[col_obrigatoria] = ""
+            df[col_obrigatoria] = "{}" if col_obrigatoria in ['cores_customizadas', 'campos_manuais'] else ""
 
     df['monitor'] = df['monitor'].astype(str).str.upper().str.strip()
 
@@ -292,35 +292,24 @@ def construir_json_rotas() -> str:
     col_series = pd.to_numeric(df['coletado_geral'].astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce').fillna(0).astype(int)
     df['restante'] = (est_series - col_series).astype(str)
 
+    # Só traduz status brutos do Meli se a linha NÃO tiver alteração manual nem pintura na coluna status
     st_upper = df['status'].astype(str).str.strip().str.upper()
     manual_upper = df['status_manual'].astype(str).str.strip().str.upper()
-    nao_manual = manual_upper != "SIM"
+    tem_cor_status = df['cores_customizadas'].astype(str).str.contains('"status"', na=False)
+    tem_campo_status = df['campos_manuais'].astype(str).str.contains('"status"', na=False)
+    nao_manual = (manual_upper != "SIM") & (~tem_cor_status) & (~tem_campo_status)
 
     mask_sem_ini = nao_manual & st_upper.str.contains("SEM INÍCIO|SEM INICIO", regex=True, na=False)
-    mask_andamento = nao_manual & (st_upper.str.contains("ANDAMENTO", na=False) | st_upper.isin(["INÍCIO", "INICIO", "LOGADO", "COLETANDO"]))
+    mask_andamento = nao_manual & (st_upper.str.contains("ANDAMENTO", na=False) | st_upper.isin(["INÍCIO", "INICIO"]))
     mask_concluida = nao_manual & st_upper.str.contains("CONCLU", na=False)
-    mask_finalizado = st_upper == "FINALIZADO"
+    mask_finalizado = nao_manual & (st_upper == "FINALIZADO")
 
-    # Se não teve alteração manual e está LOGADO/EM ANDAMENTO com pacotes coletados > 0, vira COLETANDO!
-    precisa_atualizar_status = (
-        mask_sem_ini.any() or
-        (mask_andamento & (col_series > 0) & (st_upper != "COLETANDO")).any() or
-        (mask_andamento & (col_series <= 0) & (st_upper != "LOGADO")).any() or
-        mask_concluida.any() or
-        mask_finalizado.any()
-    )
-
-    if precisa_atualizar_status:
-        df.loc[mask_sem_ini, 'status'] = "PENDENTE DE LOGIN"
-        df.loc[mask_andamento & (col_series > 0), 'status'] = "COLETANDO"
-        df.loc[mask_andamento & (col_series <= 0), 'status'] = "LOGADO"
-        df.loc[mask_concluida & (col_series > 0), 'status'] = "FINALIZADA"
-        df.loc[mask_concluida & (col_series <= 0), 'status'] = "CANCELADA"
-        df.loc[mask_finalizado, 'status'] = "FINALIZADA"
-        try:
-            df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
-        except Exception:
-            pass
+    df.loc[mask_sem_ini, 'status'] = "PENDENTE DE LOGIN"
+    df.loc[mask_andamento & (col_series > 0), 'status'] = "COLETANDO"
+    df.loc[mask_andamento & (col_series <= 0), 'status'] = "LOGADO"
+    df.loc[mask_concluida & (col_series > 0), 'status'] = "FINALIZADA"
+    df.loc[mask_concluida & (col_series <= 0), 'status'] = "CANCELADA"
+    df.loc[mask_finalizado, 'status'] = "FINALIZADA"
 
     json_str = df.to_json(orient="records", force_ascii=False)
     CACHE_DADOS["rotas_json"] = json_str
@@ -808,26 +797,49 @@ def ler_logs(ultimo_indice: int = 0):
       "conta_okta": conta_okta_ativa,
       "tempo_sessao_seg": tempo_sessao_seg,
   }
+
 # ==========================================
-# ATUALIZAÇÕES MANUAIS DA PLANILHA (GRID)
+# ATUALIZAÇÕES MANUAIS DA PLANILHA (GRID) 
 # ==========================================
+def marcar_coluna_manual_db(conn, id_alvo: str, nomes_colunas: list):
+    """Registra no banco que determinadas colunas desta rota foram editadas/pintadas manualmente"""
+    conn.execute(text("ALTER TABLE rotas_monitoramento ADD COLUMN IF NOT EXISTS campos_manuais TEXT DEFAULT '{}'"))
+    row = conn.execute(
+        text("SELECT campos_manuais FROM rotas_monitoramento WHERE id_rota = :id LIMIT 1"),
+        {"id": id_alvo}
+    ).fetchone()
+    try:
+        atual = json.loads(row[0]) if row and row[0] else {}
+        if not isinstance(atual, dict):
+            atual = {}
+    except Exception:
+        atual = {}
+    for c in nomes_colunas:
+        atual[c] = True
+    conn.execute(
+        text("UPDATE rotas_monitoramento SET campos_manuais = :cm WHERE id_rota = :id"),
+        {"cm": json.dumps(atual), "id": id_alvo}
+    )
+
 @app.post("/atualizar_cluster")
 async def atualizar_cluster(request: Request):
     dados = await request.json()
+    id_alvo = str(dados.get("id_rota", "")).strip()
+    novo_cluster = str(dados.get("novo_cluster", "")).upper().strip()
     try:
-        df = pd.read_sql_table('rotas_monitoramento', con=motor_db)
-        df['id_rota'] = df['id_rota'].astype(str)
-        id_alvo = str(dados.get("id_rota"))
-        novo_cluster = str(dados.get("novo_cluster", "")).upper().strip()
-        
-        df.loc[df['id_rota'] == id_alvo, 'cluster'] = novo_cluster
-        
-        if "monitor" in dados:
-            if 'monitor' not in df.columns:
-                df['monitor'] = ""
-            df.loc[df['id_rota'] == id_alvo, 'monitor'] = str(dados.get("monitor", "")).upper().strip()
-            
-        df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
+        with motor_db.begin() as conn:
+            if "monitor" in dados:
+                mon = str(dados.get("monitor", "")).upper().strip()
+                conn.execute(
+                    text("UPDATE rotas_monitoramento SET cluster = :c, monitor = :m WHERE id_rota = :id"),
+                    {"c": novo_cluster, "m": mon, "id": id_alvo}
+                )
+            else:
+                conn.execute(
+                    text("UPDATE rotas_monitoramento SET cluster = :c WHERE id_rota = :id"),
+                    {"c": novo_cluster, "id": id_alvo}
+                )
+            marcar_coluna_manual_db(conn, id_alvo, ["cluster"])
         invalidar_cache_rotas()
         return {"sucesso": True}
     except Exception as e: 
@@ -837,43 +849,49 @@ async def atualizar_cluster(request: Request):
 @app.post("/atualizar_observacao")
 async def atualizar_obs(request: Request):
     dados = await request.json()
+    id_alvo = str(dados.get("id_rota", "")).strip()
+    obs = str(dados.get("observacao", ""))
     try:
-        df = pd.read_sql_table('rotas_monitoramento', con=motor_db)
-        df['id_rota'] = df['id_rota'].astype(str)
-        if 'observacoes' not in df.columns: 
-            df['observacoes'] = ""
-        df.loc[df['id_rota'] == str(dados.get("id_rota")), 'observacoes'] = str(dados.get("observacao"))
-        df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
+        with motor_db.begin() as conn:
+            conn.execute(
+                text("UPDATE rotas_monitoramento SET observacoes = :ob WHERE id_rota = :id"),
+                {"ob": obs, "id": id_alvo}
+            )
+            marcar_coluna_manual_db(conn, id_alvo, ["observacoes"])
         invalidar_cache_rotas()
         return {"sucesso": True}
-    except Exception: 
-        return {}
+    except Exception as e: 
+        return {"sucesso": False, "erro": str(e)}
 
 @app.post("/atualizar_revertido")
 async def atualizar_rev(request: Request):
     dados = await request.json()
+    id_alvo = str(dados.get("id_rota", "")).strip()
+    rev = str(dados.get("revertido", "")).upper().strip()
     try:
-        df = pd.read_sql_table('rotas_monitoramento', con=motor_db)
-        df['id_rota'] = df['id_rota'].astype(str)
-        if 'revertido' not in df.columns: 
-            df['revertido'] = ""
-        df.loc[df['id_rota'] == str(dados.get("id_rota")), 'revertido'] = str(dados.get("revertido"))
-        df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
+        with motor_db.begin() as conn:
+            conn.execute(
+                text("UPDATE rotas_monitoramento SET revertido = :rv WHERE id_rota = :id"),
+                {"rv": rev, "id": id_alvo}
+            )
+            marcar_coluna_manual_db(conn, id_alvo, ["revertido"])
         invalidar_cache_rotas()
         return {"sucesso": True}
-    except Exception: 
-        return {}
+    except Exception as e: 
+        return {"sucesso": False, "erro": str(e)}
 
 @app.post("/atualizar_ocorrencia")
 async def atualizar_ocorrencia_rota(request: Request):
     dados = await request.json()
+    id_alvo = str(dados.get("id_rota", "")).strip()
+    oc = str(dados.get("ocorrencia", "")).strip()
     try:
-        df = pd.read_sql_table('rotas_monitoramento', con=motor_db)
-        df['id_rota'] = df['id_rota'].astype(str)
-        if 'ocorrencia' not in df.columns: 
-            df['ocorrencia'] = ""
-        df.loc[df['id_rota'] == str(dados.get("id_rota")), 'ocorrencia'] = str(dados.get("ocorrencia", "")).strip()
-        df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
+        with motor_db.begin() as conn:
+            conn.execute(
+                text("UPDATE rotas_monitoramento SET ocorrencia = :oc WHERE id_rota = :id"),
+                {"oc": oc, "id": id_alvo}
+            )
+            marcar_coluna_manual_db(conn, id_alvo, ["ocorrencia"])
         invalidar_cache_rotas()
         return {"sucesso": True}
     except Exception as e: 
@@ -882,48 +900,100 @@ async def atualizar_ocorrencia_rota(request: Request):
 @app.post("/atualizar_status")
 async def atualizar_stat(request: Request):
     dados = await request.json()
+    id_alvo = str(dados.get("id_rota", "")).strip()
+    novo_status = str(dados.get("status", "")).upper().strip()
+    if novo_status == "FINALIZADO":
+        novo_status = "FINALIZADA"
+    flag_manual = "SIM" if novo_status != "" else ""
     try:
-        df = pd.read_sql_table('rotas_monitoramento', con=motor_db)
-        df['id_rota'] = df['id_rota'].astype(str)
-        if 'status_manual' not in df.columns:
-            df['status_manual'] = ""
-        id_alvo = str(dados.get("id_rota"))
-        novo_status = str(dados.get("status", "")).upper().strip()
-        if novo_status == "FINALIZADO":
-            novo_status = "FINALIZADA"
-        df.loc[df['id_rota'] == id_alvo, 'status'] = novo_status
-        df.loc[df['id_rota'] == id_alvo, 'status_manual'] = "SIM" if novo_status != "" else ""
-        df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
+        with motor_db.begin() as conn:
+            conn.execute(
+                text("UPDATE rotas_monitoramento SET status = :st, status_manual = :sm WHERE id_rota = :id"),
+                {"st": novo_status, "sm": flag_manual, "id": id_alvo}
+            )
+            if flag_manual == "SIM":
+                marcar_coluna_manual_db(conn, id_alvo, ["status"])
         invalidar_cache_rotas()
         return {"sucesso": True}
-    except Exception: 
-        return {}
+    except Exception as e: 
+        return {"sucesso": False, "erro": str(e)}
+
+@app.post("/atualizar_pacotes_manual")
+async def atualizar_pacotes_manual(request: Request):
+    """Salva edições manuais de Estimado Total ou Coletados e trava para o robô não sobrescrever"""
+    dados = await request.json()
+    id_alvo = str(dados.get("id_rota", "")).strip()
+    coluna = str(dados.get("coluna", "")).strip()
+    valor = re.sub(r"\D", "", str(dados.get("valor", "0"))) or "0"
+
+    if coluna not in ["estimado_total", "coletado_geral"]:
+        return {"sucesso": False, "erro": "Coluna inválida"}
+
+    try:
+        with motor_db.begin() as conn:
+            conn.execute(
+                text(f"UPDATE rotas_monitoramento SET {coluna} = :val WHERE id_rota = :id"),
+                {"val": valor, "id": id_alvo}
+            )
+            row = conn.execute(
+                text("SELECT estimado_total, coletado_geral FROM rotas_monitoramento WHERE id_rota = :id LIMIT 1"),
+                {"id": id_alvo}
+            ).fetchone()
+            if row:
+                est_i = int(re.sub(r"\D", "", str(row[0] or "0")) or "0")
+                col_i = int(re.sub(r"\D", "", str(row[1] or "0")) or "0")
+                rest_str = str(est_i - col_i)
+                conn.execute(
+                    text("UPDATE rotas_monitoramento SET restante = :re WHERE id_rota = :id"),
+                    {"re": rest_str, "id": id_alvo}
+                )
+            marcar_coluna_manual_db(conn, id_alvo, [coluna])
+        invalidar_cache_rotas()
+        return {"sucesso": True}
+    except Exception as e:
+        return {"sucesso": False, "erro": str(e)}
 
 @app.post("/atualizar_cor")
 async def atualizar_cor(request: Request):
     dados = await request.json()
-    id_rota = str(dados.get("id_rota"))
-    coluna = str(dados.get("coluna"))
-    cor = str(dados.get("cor"))
+    id_rota = str(dados.get("id_rota", "")).strip()
+    coluna = str(dados.get("coluna", "")).strip()
+    cor = str(dados.get("cor", "")).strip()
     try:
-        df = pd.read_sql_table('rotas_monitoramento', con=motor_db)
-        df['id_rota'] = df['id_rota'].astype(str)
-        if 'cores_customizadas' not in df.columns: 
-            df['cores_customizadas'] = "{}"
-        if id_rota in df['id_rota'].values:
-            idx = df.index[df['id_rota'] == id_rota].tolist()[0]
-            str_cores = df.at[idx, 'cores_customizadas']
-            try: 
-                dict_cores = json.loads(str_cores) if pd.notna(str_cores) and str_cores != "" else {}
-            except Exception: 
+        with motor_db.begin() as conn:
+            conn.execute(text("ALTER TABLE rotas_monitoramento ADD COLUMN IF NOT EXISTS cores_customizadas TEXT DEFAULT '{}'"))
+            row = conn.execute(
+                text("SELECT cores_customizadas FROM rotas_monitoramento WHERE id_rota = :id LIMIT 1"),
+                {"id": id_rota}
+            ).fetchone()
+            try:
+                dict_cores = json.loads(row[0]) if row and row[0] else {}
+                if not isinstance(dict_cores, dict):
+                    dict_cores = {}
+            except Exception:
                 dict_cores = {}
-            dict_cores[coluna] = cor
-            df.at[idx, 'cores_customizadas'] = json.dumps(dict_cores)
-            df.to_sql('rotas_monitoramento', con=motor_db, if_exists='replace', index=False)
-            invalidar_cache_rotas()
+
+            # Se escolher Sem Preenchimento (#ffffff), remove a cor customizada para restaurar a cor padrão
+            if cor.lower() in ["#ffffff", "transparent", ""]:
+                dict_cores.pop(coluna, None)
+            else:
+                dict_cores[coluna] = cor
+                # Ao pintar qualquer coluna (ex: status, estimado_total, coletado_geral), trava o valor para o robô não alterar em cima!
+                marcar_coluna_manual_db(conn, id_rota, [coluna])
+                if coluna == "status":
+                    conn.execute(
+                        text("UPDATE rotas_monitoramento SET status_manual = 'SIM' WHERE id_rota = :id"),
+                        {"id": id_rota}
+                    )
+
+            conn.execute(
+                text("UPDATE rotas_monitoramento SET cores_customizadas = :cc WHERE id_rota = :id"),
+                {"cc": json.dumps(dict_cores), "id": id_rota}
+            )
+        invalidar_cache_rotas()
         return {"sucesso": True}
-    except Exception: 
-        return {}
+    except Exception as e: 
+        return {"sucesso": False, "erro": str(e)}
 
 # ==========================================
 # DOWNLOAD DE RELATÓRIO PARA O PC DO USUÁRIO
