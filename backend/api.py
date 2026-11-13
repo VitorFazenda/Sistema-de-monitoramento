@@ -49,7 +49,9 @@ CACHE_DADOS = {
     "rotas_brutas_json": None,
     "rotas_brutas_ts": 0,
     "ocorrencias_json": None,
-    "ocorrencias_ts": 0
+    "ocorrencias_ts": 0,
+    "avulsas_json": None,
+    "avulsas_ts": 0
 }
 
 def invalidar_cache_rotas():
@@ -65,6 +67,10 @@ def invalidar_cache_brutas():
 def invalidar_cache_ocorrencias():
     CACHE_DADOS["ocorrencias_json"] = None
     CACHE_DADOS["ocorrencias_ts"] = 0
+
+def invalidar_cache_avulsas():
+    CACHE_DADOS["avulsas_json"] = None
+    CACHE_DADOS["avulsas_ts"] = 0
 
 def aquecer_cache_background():
     """Pré-carrega os dados em memória assim que a API inicia para o 1º acesso ser instantâneo"""
@@ -269,6 +275,110 @@ async def salvar_edicao_ocorrencia(request: Request):
         return {"sucesso": False, "erro": str(e)}
 
 # ==========================================
+# CONTROLE DE ROTAS AVULSAS 
+# ==========================================
+@app.get("/rotas_avulsas_edicoes")
+def listar_edicoes_rotas_avulsas():
+    agora = time.time()
+    if CACHE_DADOS.get("avulsas_json") is not None and (agora - CACHE_DADOS.get("avulsas_ts", 0)) < 300:
+        return Response(content=CACHE_DADOS["avulsas_json"], media_type="application/json")
+
+    try:
+        insp = inspect(motor_db)
+        if not insp.has_table('controle_rotas_avulsas'):
+            return {}
+        df = pd.read_sql_table('controle_rotas_avulsas', con=motor_db).fillna("")
+        if df.empty:
+            return {}
+
+        resultado = {}
+        for _, row in df.iterrows():
+            id_r = str(row.get('id_rota', '')).strip()
+            if not id_r:
+                continue
+            form_val = str(row.get('formulario', 'NÃO')).upper().strip() or 'NÃO'
+            pag_val = str(row.get('pagamento', 'NÃO')).upper().strip() or 'NÃO'
+            resultado[id_r] = {
+                "id_rota": id_r,
+                "nome_rota": str(row.get('nome_rota', '')).strip(),
+                "motorista": str(row.get('motorista', '')).strip(),
+                "formulario": "SIM" if form_val == "SIM" else "NÃO",
+                "pagamento": "SIM" if pag_val == "SIM" else "NÃO",
+                "observacao": str(row.get('observacao', '')).strip()
+            }
+
+        json_str = json.dumps(resultado, ensure_ascii=False)
+        CACHE_DADOS["avulsas_json"] = json_str
+        CACHE_DADOS["avulsas_ts"] = agora
+        return Response(content=json_str, media_type="application/json")
+    except Exception:
+        return {}
+
+@app.post("/salvar_edicao_avulsa")
+async def salvar_edicao_avulsa(request: Request):
+    dados = await request.json()
+    id_rota = str(dados.get("id_rota", "")).strip()
+    nome_rota = str(dados.get("nome_rota", "")).strip()
+    motorista = str(dados.get("motorista", "")).strip()
+    formulario = "SIM" if str(dados.get("formulario", "NÃO")).upper().strip() == "SIM" else "NÃO"
+    pagamento = "SIM" if str(dados.get("pagamento", "NÃO")).upper().strip() == "SIM" else "NÃO"
+    observacao = str(dados.get("observacao", "")).strip()
+
+    if not id_rota:
+        return {"sucesso": False, "erro": "ID da rota inválido"}
+
+    try:
+        with motor_db.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS controle_rotas_avulsas (
+                    id_rota VARCHAR(50) PRIMARY KEY,
+                    nome_rota VARCHAR(100),
+                    motorista VARCHAR(255),
+                    formulario VARCHAR(20) DEFAULT 'NÃO',
+                    pagamento VARCHAR(20) DEFAULT 'NÃO',
+                    observacao TEXT DEFAULT ''
+                )
+            """))
+            count = conn.execute(
+                text("SELECT count(*) FROM controle_rotas_avulsas WHERE id_rota = :id"),
+                {"id": id_rota}
+            ).scalar()
+            if count > 0:
+                conn.execute(text("""
+                    UPDATE controle_rotas_avulsas
+                    SET nome_rota = CASE WHEN :nr <> '' THEN :nr ELSE nome_rota END,
+                        motorista = CASE WHEN :mt <> '' THEN :mt ELSE motorista END,
+                        formulario = :fm,
+                        pagamento = :pg,
+                        observacao = :ob
+                    WHERE id_rota = :id
+                """), {
+                    "nr": nome_rota,
+                    "mt": motorista,
+                    "fm": formulario,
+                    "pg": pagamento,
+                    "ob": observacao,
+                    "id": id_rota
+                })
+            else:
+                conn.execute(text("""
+                    INSERT INTO controle_rotas_avulsas (id_rota, nome_rota, motorista, formulario, pagamento, observacao)
+                    VALUES (:id, :nr, :mt, :fm, :pg, :ob)
+                """), {
+                    "id": id_rota,
+                    "nr": nome_rota,
+                    "mt": motorista,
+                    "fm": formulario,
+                    "pg": pagamento,
+                    "ob": observacao
+                })
+
+        invalidar_cache_avulsas()
+        return {"sucesso": True}
+    except Exception as e:
+        return {"sucesso": False, "erro": str(e)}
+
+# ==========================================
 # ROTAS DO SISTEMA DE MONITORAMENTO E BI 
 # ==========================================
 def construir_json_rotas() -> str:
@@ -388,13 +498,15 @@ def carregar_df_rotas_brutas_limpo():
         return pd.DataFrame()
 
     colunas_uteis = [
-        'ID do Rota', 'Nome da Rota', 'Data da rota', 'Data', 'ID do Motorista',
-        'Tipo de parada', 'Parada', 'ID de Parada', 'Horários', 'ONTIME',
-        'Pontualidade', 'Hora de coleta concluída', 'Pacotes coletados',
-        'Pacotes estimados', 'Pacotes preparados', 'Tipo do Rota',
-        'Motivo', 'Detalhes', 'Pacotes não preparados/Não estão na agência',
-        'Pacotes não cabem no veículo', 'Pacotes em mau estado'
-    ]
+            'ID do Rota', 'Nome da Rota', 'Data da rota', 'Data',
+            'ID del Depósito', 'Depósito', 'ID do Nodo', 'ID do Motorista',
+            'ID do Veículo', 'Tipo de veículo', 'Tipo de parada', 'Parada',
+            'ID de Parada', 'Horários', 'ONTIME', 'Pontualidade',
+            'Hora de coleta concluída', 'Pacotes coletados', 'Pacotes estimados',
+            'Pacotes preparados', 'Tipo do Rota', 'Planejado', 'Motivo', 'Detalhes',
+            'Pacotes não preparados/Não estão na agência',
+            'Pacotes não cabem no veículo', 'Pacotes em mau estado'
+        ]
     cols_existentes = [c for c in colunas_uteis if c in df.columns]
     if len(cols_existentes) >= 5:
         df = df[cols_existentes]
@@ -455,11 +567,13 @@ def buscar_json_brutas_por_data(data_alvo: str) -> str:
         ).fillna("")
 
         colunas_uteis = [
-            'ID do Rota', 'Nome da Rota', 'Data da rota', 'Data', 'ID do Motorista',
-            'Tipo de parada', 'Parada', 'ID de Parada', 'Horários', 'ONTIME',
-            'Pontualidade', 'Hora de coleta concluída', 'Pacotes coletados',
-            'Pacotes estimados', 'Pacotes preparados', 'Tipo do Rota',
-            'Motivo', 'Detalhes', 'Pacotes não preparados/Não estão na agência',
+            'ID do Rota', 'Nome da Rota', 'Data da rota', 'Data',
+            'ID del Depósito', 'Depósito', 'ID do Nodo', 'ID do Motorista',
+            'ID do Veículo', 'Tipo de veículo', 'Tipo de parada', 'Parada',
+            'ID de Parada', 'Horários', 'ONTIME', 'Pontualidade',
+            'Hora de coleta concluída', 'Pacotes coletados', 'Pacotes estimados',
+            'Pacotes preparados', 'Tipo do Rota', 'Planejado', 'Motivo', 'Detalhes',
+            'Pacotes não preparados/Não estão na agência',
             'Pacotes não cabem no veículo', 'Pacotes em mau estado'
         ]
         cols_existentes = [c for c in colunas_uteis if c in df_dia.columns]
@@ -502,11 +616,13 @@ def puxar_rotas_brutas(inicial: int = 0, data: str = ""):
     try:
         df_all = pd.read_sql_table('rotas_brutas', con=motor_db).fillna("")
         colunas_uteis = [
-            'ID do Rota', 'Nome da Rota', 'Data da rota', 'Data', 'ID do Motorista',
-            'Tipo de parada', 'Parada', 'ID de Parada', 'Horários', 'ONTIME',
-            'Pontualidade', 'Hora de coleta concluída', 'Pacotes coletados',
-            'Pacotes estimados', 'Pacotes preparados', 'Tipo do Rota',
-            'Motivo', 'Detalhes', 'Pacotes não preparados/Não estão na agência',
+            'ID do Rota', 'Nome da Rota', 'Data da rota', 'Data',
+            'ID del Depósito', 'Depósito', 'ID do Nodo', 'ID do Motorista',
+            'ID do Veículo', 'Tipo de veículo', 'Tipo de parada', 'Parada',
+            'ID de Parada', 'Horários', 'ONTIME', 'Pontualidade',
+            'Hora de coleta concluída', 'Pacotes coletados', 'Pacotes estimados',
+            'Pacotes preparados', 'Tipo do Rota', 'Planejado', 'Motivo', 'Detalhes',
+            'Pacotes não preparados/Não estão na agência',
             'Pacotes não cabem no veículo', 'Pacotes em mau estado'
         ]
         cols_existentes = [c for c in colunas_uteis if c in df_all.columns]

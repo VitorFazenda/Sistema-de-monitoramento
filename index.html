@@ -533,8 +533,72 @@
 
             <!-- SUB-ABA: ROTAS AVULSAS -->
             <div id="sub-rotas-avulsas" class="sub-conteudo">
-                <div style="padding: 24px; background: #eef1f7; height: 100%; display: flex; align-items: center; justify-content: center; box-sizing: border-box;">
-                    <span style="font-size: 18px; font-weight: 700; color: #4a5a7a;">Em desenvolvimento</span>
+                <div id="ra-wrapper" style="padding: 24px; background: #eef1f7; height: 100%; overflow-y: auto; box-sizing: border-box;">
+                    
+                    <!-- Cabeçalho e Botão de Exportação -->
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; flex-wrap: wrap; gap: 15px;">
+                        <div>
+                            <h2 style="margin-top: 0; margin-bottom: 5px; color: #0d1b3e;">Controle de Rotas Avulsas</h2>
+                            <p style="font-size: 12px; color: #4a5a7a; margin: 0;">
+                                Rotas sem nome programado no relatório (identificadas pelo ID da Rota e cruzadas com a Planilha de Monitoramento).<br>
+                                Filtro de permissão atual: <b id="ra-hub-label" style="color: #c2410c;">TODOS</b>.
+                            </p>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 12px; background: white; padding: 10px 15px; border-radius: 8px; border: 1px solid #dde3ef; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+                            <button onclick="exportarExcelRotasAvulsas()" style="padding: 8px 14px; background: #e5a800; color: #0d1b3e; border: none; border-radius: 6px; font-size: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 5px;">
+                                ⬇ EXPORTAR EXCEL AVULSAS
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 3 CARDS INICIAIS: QUANTIDADE GERAL | FORMS SIM/NÃO | PAGAMENTO SIM/NÃO -->
+                    <div id="ra-kpis" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 20px;"></div>
+
+                    <!-- TABELA DE ROTAS AVULSAS -->
+                    <div class="bi-section" style="box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+                        <div class="bi-tab-bar" style="background: #0f172a; color: white; padding: 12px 18px; border-radius: 10px 10px 0 0; display: flex; justify-content: space-between; align-items: center;">
+                            <span style="font-size: 14px; font-weight: 700;">📋 Listagem de Rotas Avulsas</span>
+                            <span id="ra-badge-contador" style="font-size: 11px; background: #1e293b; color: #38bdf8; padding: 4px 10px; border-radius: 12px; font-weight: 800;">0 rotas</span>
+                        </div>
+
+                        <div class="bi-controls" style="background: #f8fafc;">
+                            <label>Buscar:</label>
+                            <input type="text" id="ra-search-input" placeholder="ID da rota, motorista, HUB, observação..." oninput="renderizarTabelaRotasAvulsas()" style="flex: 1; max-width: 280px;">
+
+                            <label style="margin-left: 8px;">Formulário:</label>
+                            <select id="ra-filter-form" onchange="renderizarTabelaRotasAvulsas()">
+                                <option value="TODOS">Todos</option>
+                                <option value="SIM">SIM</option>
+                                <option value="NÃO">NÃO</option>
+                            </select>
+
+                            <label style="margin-left: 8px;">Pagamento:</label>
+                            <select id="ra-filter-pag" onchange="renderizarTabelaRotasAvulsas()">
+                                <option value="TODOS">Todos</option>
+                                <option value="SIM">SIM</option>
+                                <option value="NÃO">NÃO</option>
+                            </select>
+                        </div>
+
+                        <div class="bi-tbl-wrap" style="max-height: 480px; overflow-y: auto;">
+                            <table class="bi-table" id="ra-tbl-avulsas">
+                                <thead>
+                                    <tr>
+                                        <th>ID da Rota</th>
+                                        <th>Data</th>
+                                        <th>Nome da Rota</th>
+                                        <th>Nome do Motorista</th>
+                                        <th style="text-align: center;">Formulário</th>
+                                        <th style="text-align: center;">Pagamento</th>
+                                        <th>Observações</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                        <div class="bi-footer-info" id="ra-footer-info"></div>
+                    </div>
+
                 </div>
             </div>
 

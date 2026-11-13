@@ -1444,6 +1444,7 @@ async function aplicarFiltroUnificadoEstatisticas() {
     limparFiltroMotivoOC();
     gerarOC(baseProgramadas);
     gerarGeralOperacao(baseProgramadas);
+    gerarRotasAvulsas(baseAvulsas);
     estatisticasCalculadas = true;
 }
 
@@ -1505,6 +1506,8 @@ let promessaRelatorios = null;
 function carregarRotas(exibirToastRobo = false) {
     carregandoRotasAgora = true;
     if (!rotasJaCarregadas) controlarLoadingInfoAba('monitoramento', true);
+    if (!d.erro && Array.isArray(d)) {
+                window.todasRotasMonitoramento = d;
 
     promessaRotas = fetch(`${API_BASE_URL}/rotas`)
         .then(r => r.json())
@@ -1548,6 +1551,7 @@ function carregarRotas(exibirToastRobo = false) {
             controlarLoadingInfoAba('monitoramento', false);
         });
     return promessaRotas;
+    }
 }
 
 function carregarRelatorios(exibirToastRobo = false) {
@@ -1744,6 +1748,7 @@ function iniciarSistemaAposLogin() {
     carregarCoresCustomizadas();
     carregarMetas();
     carregarEdicoesOcorrencias();
+    carregarEdicoesRotasAvulsas();
     carregarRotas(false);
 
     setTimeout(() => {
@@ -3570,3 +3575,389 @@ function otimizarFaviconAba() {
 
 document.addEventListener("DOMContentLoaded", otimizarFaviconAba);
 
+// ==========================================
+// MÓDULO DE ROTAS AVULSAS 
+// ==========================================
+let controleRotasAvulsas = {};
+let listaRotasAvulsasConsolidada = [];
+
+function carregarEdicoesRotasAvulsas() {
+    fetch(`${API_BASE_URL}/rotas_avulsas_edicoes`)
+        .then(r => r.json())
+        .then(d => {
+            controleRotasAvulsas = d || {};
+            if (rotasBrutas.length > 0 || (window.todasRotasMonitoramento && window.todasRotasMonitoramento.length > 0)) {
+                if (ROTAS_AVULSAS_DATA && Array.isArray(ROTAS_AVULSAS_DATA.raw)) {
+                    gerarRotasAvulsas(ROTAS_AVULSAS_DATA.raw);
+                }
+            }
+        })
+        .catch(e => console.error(e));
+}
+
+function normalizarDataComparacaoRA(strData) {
+    if (!strData) return "";
+    const p = String(strData).trim().split(' ')[0].split(/[-/]/);
+    if (p.length >= 3) {
+        if (p[0].length === 4) return `${p[2].padStart(2, '0')}/${p[1].padStart(2, '0')}/${p[0]}`;
+        return `${p[0].padStart(2, '0')}/${p[1].padStart(2, '0')}/${p[2]}`;
+    }
+    return String(strData).trim();
+}
+
+function gerarRotasAvulsas(baseAvulsasRelatorio) {
+    if (currentUser && document.getElementById('ra-hub-label')) {
+        document.getElementById('ra-hub-label').innerText = currentUser.hubs || 'TODOS';
+    }
+
+    // 1. Cria um mapa rápido das rotas da Planilha de Monitoramento (id_rota -> { nome_rota, motorista, data })
+    const mapaMonitoramento = {};
+    const baseMon = window.todasRotasMonitoramento || rotasGlobais || [];
+    baseMon.forEach(rm => {
+        const idM = String(rm.id_rota || '').trim();
+        if (idM) {
+            mapaMonitoramento[idM] = {
+                nome_rota: String(rm.nome_rota || '').trim(),
+                motorista: String(rm.motorista || '').trim(),
+                data: String(rm.data || '').trim()
+            };
+        }
+    });
+
+    const agrupadasPorId = new Map();
+
+    // 2. Agrupa as rotas avulsas vindas do Relatório (CSV) por ID da Rota
+    (baseAvulsasRelatorio || []).forEach(r => {
+        const idRota = String(r['ID do Rota'] || r['ID da Rota'] || '').trim();
+        if (!idRota || idRota.toLowerCase() === 'nan') return;
+
+        const hubRel = obterHubLinhaRelatorio(r);
+        const dataRel = String(r['Data da rota'] || r['Data'] || '').trim();
+        const idMotRel = String(r['ID do Motorista'] || r['Motorista'] || '').trim();
+        const pctCol = parseNumberBI(r['Pacotes coletados']);
+        const pctEst = parseNumberBI(r['Pacotes estimados']);
+
+        if (!agrupadasPorId.has(idRota)) {
+            agrupadasPorId.set(idRota, {
+                id_rota: idRota,
+                data: dataRel,
+                hub: hubRel,
+                id_motorista_csv: (idMotRel && idMotRel.toLowerCase() !== 'nan') ? idMotRel : '',
+                coletados: 0,
+                estimados: 0
+            });
+        }
+        const item = agrupadasPorId.get(idRota);
+        if (!item.hub && hubRel) item.hub = hubRel;
+        if (!item.data && dataRel) item.data = dataRel;
+        if (!item.id_motorista_csv && idMotRel && idMotRel.toLowerCase() !== 'nan') item.id_motorista_csv = idMotRel;
+        item.coletados += pctCol;
+        item.estimados += pctEst;
+    });
+
+    // 3. Também inclui rotas avulsas da Planilha de Monitoramento (ex: ARENA_ROTA_AVULSA) que batam com o filtro de Data/HUB
+    const hS = document.getElementById('filtro-hub-est') ? document.getElementById('filtro-hub-est').value : "TODOS";
+    const dS = document.getElementById('filtro-data-est') ? document.getElementById('filtro-data-est').value : "TODAS";
+    const dataFiltroNorm = (dS !== "TODAS" && dS !== "PERIODO") ? normalizarDataComparacaoRA(dS) : "";
+
+    baseMon.forEach(rm => {
+        const idM = String(rm.id_rota || '').trim();
+        const nomeM = String(rm.nome_rota || '').toUpperCase().trim();
+        if (!idM || !nomeM.includes('AVULSA')) return;
+
+        const hubM = nomeM.split('_')[0].trim();
+        if (currentUser && currentUser.hubs !== "TODOS") {
+            const meusHubs = currentUser.hubs.toUpperCase().split(',').map(h => h.trim()).filter(Boolean);
+            if (!meusHubs.some(h => hubM === h || nomeM.includes(h))) return;
+        }
+        if (hS !== "TODOS" && hubM !== hS && !nomeM.startsWith(hS)) return;
+
+        const dataMNorm = normalizarDataComparacaoRA(rm.data);
+        if (dataFiltroNorm && dataMNorm !== dataFiltroNorm) return;
+
+        if (dS === "PERIODO") {
+            const dI = document.getElementById('data-ini-est')?.value || "";
+            const dFm = document.getElementById('data-fim-est')?.value || "";
+            const pts = dataMNorm.split('/');
+            if (pts.length === 3) {
+                const dtObj = new Date(pts[2], pts[1] - 1, pts[0]);
+                if (dI) { const [y, m, d] = dI.split('-'); if (dtObj < new Date(y, m - 1, d)) return; }
+                if (dFm) { const [y, m, d] = dFm.split('-'); if (dtObj > new Date(y, m - 1, d)) return; }
+            }
+        }
+
+        if (!agrupadasPorId.has(idM)) {
+            agrupadasPorId.set(idM, {
+                id_rota: idM,
+                data: rm.data || '',
+                hub: (hubM && hubM !== 'AVULSA') ? hubM : '',
+                id_motorista_csv: '',
+                coletados: parseNumberBI(rm.coletado_geral),
+                estimados: parseNumberBI(rm.estimado_total)
+            });
+        }
+    });
+
+    // 4. Monta a lista final cruzando Nome da Rota (HUB_ROTA_AVULSA), Nome do Motorista e dados salvos no banco
+    listaRotasAvulsasConsolidada = Array.from(agrupadasPorId.values()).map(item => {
+        const infoMon = mapaMonitoramento[item.id_rota] || {};
+        const infoSalva = controleRotasAvulsas[item.id_rota] || {};
+
+        let hubFinal = item.hub;
+        if (!hubFinal && infoMon.nome_rota) {
+            const pref = infoMon.nome_rota.toUpperCase().split('_')[0].trim();
+            if (pref && pref !== 'AVULSA' && pref !== 'ROTA') hubFinal = pref;
+        }
+        if (!hubFinal && hS !== "TODOS") hubFinal = hS;
+
+        // Formato idêntico ao da Planilha de Monitoramento (ex: ARENA_ROTA_AVULSA, BRXSP10_ROTA_AVULSA)
+        let nomeRotaFinal = infoSalva.nome_rota || infoMon.nome_rota || '';
+        if (!nomeRotaFinal || !nomeRotaFinal.toUpperCase().includes('AVULSA')) {
+            nomeRotaFinal = hubFinal ? `${hubFinal}_ROTA_AVULSA` : `ROTA_AVULSA`;
+        }
+
+        // Prioriza: 1º Nome salvo manualmente | 2º Nome completo da Planilha de Monitoramento | 3º ID do Motorista no CSV
+        let motoristaFinal = infoSalva.motorista || infoMon.motorista || '';
+        if (!motoristaFinal && item.id_motorista_csv) {
+            motoristaFinal = `ID: ${item.id_motorista_csv}`;
+        }
+
+        const formStatus = String(infoSalva.formulario || 'NÃO').toUpperCase().trim() === 'SIM' ? 'SIM' : 'NÃO';
+        const pagStatus = String(infoSalva.pagamento || 'NÃO').toUpperCase().trim() === 'SIM' ? 'SIM' : 'NÃO';
+        const obsTexto = infoSalva.observacao || '';
+
+        return {
+            id_rota: item.id_rota,
+            data: item.data || infoMon.data || '-',
+            nome_rota: nomeRotaFinal,
+            motorista: motoristaFinal,
+            formulario: formStatus,
+            pagamento: pagStatus,
+            observacao: obsTexto,
+            coletados: item.coletados || 0,
+            estimados: item.estimados || 0
+        };
+    }).sort((a, b) => {
+        const cmpD = comparadorDataBR(b.data, a.data);
+        if (cmpD !== 0) return cmpD;
+        return comparadorTextoNatural(a.nome_rota, b.nome_rota) || comparadorNumerico(a.id_rota, b.id_rota);
+    });
+
+    renderizarKPIsRotasAvulsas();
+    renderizarTabelaRotasAvulsas();
+}
+
+function renderizarKPIsRotasAvulsas() {
+    const kpiCont = document.getElementById('ra-kpis');
+    if (!kpiCont) return;
+
+    const total = listaRotasAvulsasConsolidada.length;
+    const formSim = listaRotasAvulsasConsolidada.filter(r => r.formulario === 'SIM').length;
+    const formNao = total - formSim;
+
+    const pagSim = listaRotasAvulsasConsolidada.filter(r => r.pagamento === 'SIM').length;
+    const pagNao = total - pagSim;
+
+    kpiCont.innerHTML = `
+        <!-- CARD 1: QUANTIDADE GERAL DE AVULSAS -->
+        <div style="background: #fff; border: 1px solid #dde3ef; border-left: 4px solid #1a237e; border-radius: 10px; padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 6px rgba(0,0,0,0.03);">
+            <div>
+                <label style="font-size: 10.5px; font-weight: 800; text-transform: uppercase; color: #64748b; letter-spacing: 0.4px; display: block; margin-bottom: 6px;">
+                    QUANTIDADE GERAL DE AVULSAS
+                </label>
+                <div style="font-size: 28px; font-weight: 800; color: #0d1b3e; line-height: 1;">
+                    ${total.toLocaleString('pt-BR')}
+                </div>
+                <div style="font-size: 11px; color: #64748b; margin-top: 6px; font-weight: 600;">
+                    Total de rotas avulsas no filtro atual
+                </div>
+            </div>
+            <div style="width: 44px; height: 44px; border-radius: 10px; background: #e0f2fe; color: #0284c7; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 800;">
+                #
+            </div>
+        </div>
+
+        <!-- CARD 2: QUANTIDADE DE FORMS SIM / NÃO -->
+        <div style="background: #fff; border: 1px solid #dde3ef; border-left: 4px solid #0284c7; border-radius: 10px; padding: 16px 20px; display: flex; flex-direction: column; justify-content: space-between; box-shadow: 0 2px 6px rgba(0,0,0,0.03);">
+            <label style="font-size: 10.5px; font-weight: 800; text-transform: uppercase; color: #64748b; letter-spacing: 0.4px; display: block; margin-bottom: 10px;">
+                QUANTIDADE DE FORMS (SIM / NÃO)
+            </label>
+            <div style="display: flex; gap: 12px; align-items: center;">
+                <div style="flex: 1; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 8px 12px; text-align: center;">
+                    <span style="font-size: 10px; font-weight: 800; color: #15803d; display: block;">SIM</span>
+                    <span style="font-size: 22px; font-weight: 800; color: #15803d;">${formSim}</span>
+                </div>
+                <div style="flex: 1; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 8px 12px; text-align: center;">
+                    <span style="font-size: 10px; font-weight: 800; color: #b91c1c; display: block;">NÃO</span>
+                    <span style="font-size: 22px; font-weight: 800; color: #b91c1c;">${formNao}</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- CARD 3: PAGAMENTO SIM / NÃO -->
+        <div style="background: #fff; border: 1px solid #dde3ef; border-left: 4px solid #16a34a; border-radius: 10px; padding: 16px 20px; display: flex; flex-direction: column; justify-content: space-between; box-shadow: 0 2px 6px rgba(0,0,0,0.03);">
+            <label style="font-size: 10.5px; font-weight: 800; text-transform: uppercase; color: #64748b; letter-spacing: 0.4px; display: block; margin-bottom: 10px;">
+                PAGAMENTO (SIM / NÃO)
+            </label>
+            <div style="display: flex; gap: 12px; align-items: center;">
+                <div style="flex: 1; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 8px 12px; text-align: center;">
+                    <span style="font-size: 10px; font-weight: 800; color: #15803d; display: block;">SIM</span>
+                    <span style="font-size: 22px; font-weight: 800; color: #15803d;">${pagSim}</span>
+                </div>
+                <div style="flex: 1; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 8px 12px; text-align: center;">
+                    <span style="font-size: 10px; font-weight: 800; color: #b91c1c; display: block;">NÃO</span>
+                    <span style="font-size: 22px; font-weight: 800; color: #b91c1c;">${pagNao}</span>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function obterRotasAvulsasFiltradasNaTela() {
+    const termo = (document.getElementById('ra-search-input')?.value || '').toLowerCase().trim();
+    const fForm = document.getElementById('ra-filter-form')?.value || 'TODOS';
+    const fPag = document.getElementById('ra-filter-pag')?.value || 'TODOS';
+
+    return listaRotasAvulsasConsolidada.filter(r => {
+        if (fForm !== 'TODOS' && r.formulario !== fForm) return false;
+        if (fPag !== 'TODOS' && r.pagamento !== fPag) return false;
+        if (termo) {
+            const match =
+                String(r.id_rota).toLowerCase().includes(termo) ||
+                String(r.nome_rota).toLowerCase().includes(termo) ||
+                String(r.motorista).toLowerCase().includes(termo) ||
+                String(r.observacao).toLowerCase().includes(termo) ||
+                String(r.data).toLowerCase().includes(termo);
+            if (!match) return false;
+        }
+        return true;
+    });
+}
+
+function renderizarTabelaRotasAvulsas() {
+    const tbl = document.getElementById('ra-tbl-avulsas');
+    if (!tbl) return;
+    const tbody = tbl.querySelector('tbody');
+    const badgeCont = document.getElementById('ra-badge-contador');
+    const footer = document.getElementById('ra-footer-info');
+
+    const filtradas = obterRotasAvulsasFiltradasNaTela();
+    if (badgeCont) badgeCont.innerText = `${filtradas.length} rota${filtradas.length !== 1 ? 's' : ''}`;
+
+    const podeEditar = !currentUser || currentUser.cargo !== 'MONITOR GRAU 1';
+
+    if (filtradas.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: #8a9abc; padding: 28px;">Nenhuma rota avulsa encontrada para o filtro selecionado.</td></tr>`;
+        if (footer) footer.innerText = "0 rotas avulsas exibidas.";
+        return;
+    }
+
+    tbody.innerHTML = filtradas.map(r => {
+        const idEsc = String(r.id_rota).replace(/'/g, "\\'");
+        const motEsc = String(r.motorista || '').replace(/"/g, '&quot;');
+        const obsEsc = String(r.observacao || '').replace(/"/g, '&quot;');
+        const isFormSim = r.formulario === 'SIM';
+        const isPagSim = r.pagamento === 'SIM';
+
+        return `
+            <tr>
+                <td style="font-family: monospace; font-size: 12px; font-weight: 800; color: #0d1b3e;">${r.id_rota}</td>
+                <td style="font-family: monospace; font-size: 11.5px; color: #4a5a7a;">${r.data}</td>
+                <td>
+                    <span style="background: #fff3cd; color: #856404; border: 1px solid #ffe69c; padding: 3px 8px; border-radius: 6px; font-weight: 800; font-size: 11.5px;">
+                        ${r.nome_rota}
+                    </span>
+                </td>
+                <td>
+                    <input type="text" class="oc-obs-input" value="${motEsc}" placeholder="Nome do motorista..." ${podeEditar ? '' : 'disabled'} onchange="aoEditarCampoRotaAvulsa('${idEsc}', 'motorista', this.value)" style="font-weight: 700; color: #0d1b3e;">
+                </td>
+                <td style="text-align: center;">
+                    <select class="oc-rev-select ${isFormSim ? 'sim' : 'nao'}" ${podeEditar ? '' : 'disabled'} onchange="aoEditarCampoRotaAvulsa('${idEsc}', 'formulario', this.value, this)">
+                        <option value="NÃO" ${!isFormSim ? 'selected' : ''}>NÃO</option>
+                        <option value="SIM" ${isFormSim ? 'selected' : ''}>SIM</option>
+                    </select>
+                </td>
+                <td style="text-align: center;">
+                    <select class="oc-rev-select ${isPagSim ? 'sim' : 'nao'}" ${podeEditar ? '' : 'disabled'} onchange="aoEditarCampoRotaAvulsa('${idEsc}', 'pagamento', this.value, this)">
+                        <option value="NÃO" ${!isPagSim ? 'selected' : ''}>NÃO</option>
+                        <option value="SIM" ${isPagSim ? 'selected' : ''}>SIM</option>
+                    </select>
+                </td>
+                <td>
+                    <input type="text" class="oc-obs-input" value="${obsEsc}" placeholder="Adicionar observação..." ${podeEditar ? '' : 'disabled'} onchange="aoEditarCampoRotaAvulsa('${idEsc}', 'observacao', this.value)">
+                </td>
+            </tr>
+        `;
+    }).join('');
+
+    if (footer) {
+        footer.innerText = `Exibindo ${filtradas.length} de ${listaRotasAvulsasConsolidada.length} rota(s) avulsa(s).`;
+    }
+}
+
+function aoEditarCampoRotaAvulsa(idRota, campo, novoValor, selectEl) {
+    const item = listaRotasAvulsasConsolidada.find(x => String(x.id_rota) === String(idRota));
+    if (!item) return;
+
+    if (campo === 'formulario' || campo === 'pagamento') {
+        const valLimpo = String(novoValor || 'NÃO').toUpperCase().trim() === 'SIM' ? 'SIM' : 'NÃO';
+        item[campo] = valLimpo;
+        if (selectEl) {
+            selectEl.className = `oc-rev-select ${valLimpo === 'SIM' ? 'sim' : 'nao'}`;
+        }
+    } else if (campo === 'motorista') {
+        item.motorista = String(novoValor || '').trim();
+    } else if (campo === 'observacao') {
+        item.observacao = String(novoValor || '').trim();
+    }
+
+    controleRotasAvulsas[idRota] = {
+        id_rota: item.id_rota,
+        nome_rota: item.nome_rota,
+        motorista: item.motorista,
+        formulario: item.formulario,
+        pagamento: item.pagamento,
+        observacao: item.observacao
+    };
+
+    // Atualiza os cards de resumo no topo imediatamente
+    renderizarKPIsRotasAvulsas();
+
+    // Salva fixo no banco de dados PostgreSQL
+    fetch(`${API_BASE_URL}/salvar_edicao_avulsa`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(controleRotasAvulsas[idRota])
+    }).catch(e => console.error(e));
+}
+
+function exportarExcelRotasAvulsas() {
+    const filtradas = obterRotasAvulsasFiltradasNaTela();
+    if (!filtradas || filtradas.length === 0) {
+        return alert("Não existem rotas avulsas para exportar no filtro atual.");
+    }
+    const hS = obterHubFiltroEstatisticas();
+    const wb = XLSX.utils.book_new();
+
+    const total = filtradas.length;
+    const formSim = filtradas.filter(r => r.formulario === 'SIM').length;
+    const pagSim = filtradas.filter(r => r.pagamento === 'SIM').length;
+
+    const resumoSheet = [
+        ['Indicador Rotas Avulsas', 'Quantidade'],
+        ['Quantidade Geral de Avulsas', total],
+        ['Formulário - SIM', formSim],
+        ['Formulário - NÃO', total - formSim],
+        ['Pagamento - SIM', pagSim],
+        ['Pagamento - NÃO', total - pagSim]
+    ];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(resumoSheet), 'Resumo Avulsas');
+
+    const detalhesSheet = [['ID da Rota', 'Data', 'Nome da Rota', 'Nome do Motorista', 'Formulário', 'Pagamento', 'Observações']];
+    filtradas.forEach(r => {
+        detalhesSheet.push([r.id_rota, r.data, r.nome_rota, r.motorista, r.formulario, r.pagamento, r.observacao]);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detalhesSheet), 'Rotas Avulsas');
+
+    XLSX.writeFile(wb, `Rotas_Avulsas_${hS}_${new Date().toISOString().split('T')[0]}.xlsx`);
+}
