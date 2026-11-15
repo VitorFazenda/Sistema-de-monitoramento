@@ -538,9 +538,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const sessionUser = sessionStorage.getItem('currentUser');
     if(sessionUser) {
         currentUser = JSON.parse(sessionUser);
+        const nomeExib = (currentUser.nome_completo || currentUser.username).toUpperCase();
         document.getElementById('login-overlay').style.display = 'none';
-        document.getElementById('nome-usuario-logado').innerHTML = `👤 ${currentUser.username.toUpperCase()}`;
-        document.getElementById('menu-nome').innerText = currentUser.username.toUpperCase();
+        document.getElementById('nome-usuario-logado').innerHTML = `👤 ${nomeExib}`;
+        document.getElementById('menu-nome').innerText = nomeExib;
         document.getElementById('menu-cargo').innerText = currentUser.cargo;
         aplicarPermissoesDeCargo(); iniciarSistemaAposLogin();
     }
@@ -554,9 +555,10 @@ function fazerLogin() {
     .then(r => r.json()).then(d => {
         if(d.sucesso) {
             currentUser = d.usuario; sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
+            const nomeExib = (currentUser.nome_completo || currentUser.username).toUpperCase();
             document.getElementById('login-overlay').style.display = 'none';
-            document.getElementById('nome-usuario-logado').innerHTML = `👤 ${currentUser.username.toUpperCase()}`;
-            document.getElementById('menu-nome').innerText = currentUser.username.toUpperCase();
+            document.getElementById('nome-usuario-logado').innerHTML = `👤 ${nomeExib}`;
+            document.getElementById('menu-nome').innerText = nomeExib;
             document.getElementById('menu-cargo').innerText = currentUser.cargo;
             aplicarPermissoesDeCargo(); iniciarSistemaAposLogin();
         } else err.innerText = d.erro;
