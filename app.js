@@ -656,9 +656,204 @@ function ordenarRotasPorSequencia(lista) {
 }
 
 // ==========================================
-// CENTRAL DE CONFIGURAÇÕES: GESTÃO DE EQUIPE E ALERTAS
+// CENTRAL DE CONFIGURAÇÕES: GESTÃO DE EQUIPE
 // ==========================================
 let cacheColaboradoresEquipe = [];
+let hubsMarcadosFicha = new Set();
+let hubsExtrasFicha = new Set();
+
+const HUBS_PADRAO_OPERACAO = [
+    "ARENA", "BRXSP10", "BRXSP14", "BRXSP16", "BRXSP18", "BRXSP22",
+    "BRXSP5", "BRXSP7", "BRPR01", "BRPR3", "BRPR4", "BRRJ02",
+    "BRXGO1", "BRXPE1", "BRXRS1", "BRXSC2", "CAMPINAS", "CPS", "XSP4"
+];
+
+function obterTodosHubsConhecidosSistema() {
+    const conjunto = new Set(HUBS_PADRAO_OPERACAO);
+    extrairHubs(rotasGlobais || [], 'nome_rota').forEach(h => conjunto.add(h));
+    extrairHubs(rotasBrutas || [], 'Nome da Rota').forEach(h => conjunto.add(h));
+    (cacheColaboradoresEquipe || []).forEach(u => {
+        String(u.hubs || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean).forEach(h => {
+            if (h !== 'TODOS') conjunto.add(h);
+        });
+    });
+    hubsExtrasFicha.forEach(h => conjunto.add(h));
+    return Array.from(conjunto).filter(Boolean).sort();
+}
+
+function renderizarSeletorHubsFicha() {
+    const cont = document.getElementById('eq-hubs-checkboxes-container');
+    const hiddenInput = document.getElementById('eq-hubs');
+    if (!cont) return;
+
+    const listaHubs = obterTodosHubsConhecidosSistema();
+    const isTodos = hubsMarcadosFicha.size === 0 || hubsMarcadosFicha.has('TODOS');
+
+    if (hiddenInput) {
+        hiddenInput.value = isTodos ? 'TODOS' : Array.from(hubsMarcadosFicha).join(', ');
+    }
+
+    let html = `
+        <label class="hub-check-card todos-card ${isTodos ? 'marcado' : ''}">
+            <input type="checkbox" ${isTodos ? 'checked' : ''} onchange="aoMarcarHubFicha('TODOS', this.checked)">
+            <span>🌐 TODOS</span>
+        </label>
+    `;
+
+    html += listaHubs.map(h => {
+        const marcado = !isTodos && hubsMarcadosFicha.has(h);
+        const hEsc = h.replace(/'/g, "\\'");
+        return `
+            <label class="hub-check-card ${marcado ? 'marcado' : ''}">
+                <input type="checkbox" ${marcado ? 'checked' : ''} onchange="aoMarcarHubFicha('${hEsc}', this.checked)">
+                <span>${h}</span>
+            </label>
+        `;
+    }).join('');
+
+    cont.innerHTML = html;
+}
+
+function aoMarcarHubFicha(hub, marcado) {
+    if (hub === 'TODOS') {
+        hubsMarcadosFicha.clear();
+        if (marcado) hubsMarcadosFicha.add('TODOS');
+    } else {
+        hubsMarcadosFicha.delete('TODOS');
+        if (marcado) {
+            hubsMarcadosFicha.add(hub);
+        } else {
+            hubsMarcadosFicha.delete(hub);
+        }
+        if (hubsMarcadosFicha.size === 0) {
+            hubsMarcadosFicha.add('TODOS');
+        }
+    }
+    renderizarSeletorHubsFicha();
+}
+
+function adicionarHubCustomizadoFicha() {
+    const inp = document.getElementById('eq-novo-hub-custom');
+    if (!inp) return;
+    const novoHub = inp.value.trim().toUpperCase();
+    if (!novoHub) return;
+    inp.value = '';
+    if (novoHub === 'TODOS') {
+        aoMarcarHubFicha('TODOS', true);
+        return;
+    }
+    hubsExtrasFicha.add(novoHub);
+    hubsMarcadosFicha.delete('TODOS');
+    hubsMarcadosFicha.add(novoHub);
+    renderizarSeletorHubsFicha();
+}
+
+// ==========================================
+// POP-UP DE INFORMAÇÕES DO PERFIL LOGADO (AO CLICAR EM VITOR / GERENTE)
+// ==========================================
+function garantirModalMeuPerfilDOM() {
+    if (document.getElementById('modalMeuPerfilUsuario')) return;
+    const modal = document.createElement('div');
+    modal.id = 'modalMeuPerfilUsuario';
+    modal.className = 'modal-overlay';
+    modal.onclick = function(e) {
+        if (e.target === modal) modal.classList.remove('show');
+    };
+    modal.innerHTML = `
+        <div class="modal-content" style="width: 440px; max-width: 95vw; border-radius: 12px;">
+            <div class="modal-header" style="background: linear-gradient(135deg, #1a237e 0%, #283593 100%);">
+                <span>👤 Informações do Colaborador</span>
+                <span style="cursor:pointer; opacity:0.85;" onclick="document.getElementById('modalMeuPerfilUsuario').classList.remove('show')">❌</span>
+            </div>
+            <div id="corpo-modal-meu-perfil" style="padding: 24px;"></div>
+            <div style="padding: 12px 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: 10px; background: #f8fafc;">
+                <button class="btn-footer-cancel" onclick="document.getElementById('modalMeuPerfilUsuario').classList.remove('show')">Fechar</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+}
+
+async function abrirModalMeuPerfil(event) {
+    if (event) event.stopPropagation();
+    const menuUser = document.getElementById('userMenu');
+    if (menuUser) menuUser.classList.remove('show');
+    if (!currentUser) return;
+
+    garantirModalMeuPerfilDOM();
+
+    // Atualiza silenciosamente os dados do colaborador logado a partir do banco
+    try {
+        const r = await fetch(`${API_BASE_URL}/usuarios`);
+        const lista = await r.json();
+        if (Array.isArray(lista)) {
+            cacheColaboradoresEquipe = lista;
+            const meuReg = lista.find(u => String(u.username).toLowerCase() === String(currentUser.username).toLowerCase());
+            if (meuReg) {
+                currentUser.nome_completo = meuReg.nome_completo || "";
+                currentUser.telefone = meuReg.telefone || "";
+                currentUser.cargo = meuReg.cargo || currentUser.cargo;
+                currentUser.hubs = meuReg.hubs || currentUser.hubs;
+                sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
+            }
+        }
+    } catch (e) {}
+
+    const nomeExibicao = currentUser.nome_completo || currentUser.username;
+    const inicial = String(nomeExibicao || 'U').trim().charAt(0).toUpperCase();
+    const telefoneStr = currentUser.telefone || 'Não cadastrado';
+    const hubsLista = String(currentUser.hubs || 'TODOS').split(',').map(x => x.trim()).filter(Boolean);
+
+    const chipsHubs = hubsLista.map(h => `
+        <span style="background: ${h === 'TODOS' ? '#dcfce7' : '#e0f2fe'}; color: ${h === 'TODOS' ? '#15803d' : '#0369a1'}; border: 1px solid ${h === 'TODOS' ? '#86efac' : '#bae6fd'}; padding: 4px 10px; border-radius: 12px; font-size: 11.5px; font-weight: 800;">
+            📍 ${h}
+        </span>
+    `).join('');
+
+    const corpo = document.getElementById('corpo-modal-meu-perfil');
+    if (corpo) {
+        corpo.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 16px; padding-bottom: 18px; margin-bottom: 18px; border-bottom: 1px solid #e2e8f0;">
+                <div style="width: 60px; height: 60px; border-radius: 50%; background: linear-gradient(135deg, #1a237e, #0284c7); color: #ffd700; font-size: 26px; font-weight: 800; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(26,35,126,0.2); flex-shrink: 0;">
+                    ${inicial}
+                </div>
+                <div>
+                    <div style="font-size: 19px; font-weight: 800; color: #0f172a;">${nomeExibicao}</div>
+                    <div style="font-size: 12.5px; color: #64748b; font-weight: 600; margin-top: 2px;">Utilizador (Login): <b style="color: #1e293b;">${currentUser.username}</b></div>
+                    <span style="display: inline-block; margin-top: 6px; background: #fef3c7; color: #b45309; border: 1px solid #fde68a; padding: 2px 10px; border-radius: 10px; font-size: 11px; font-weight: 800;">
+                        👔 ${currentUser.cargo}
+                    </span>
+                </div>
+            </div>
+
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 12px; font-weight: 700; color: #64748b;">🪪 Nome do Colaborador</span>
+                    <span style="font-size: 13px; font-weight: 800; color: #0f172a;">${currentUser.nome_completo || currentUser.username}</span>
+                </div>
+
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 12px; font-weight: 700; color: #64748b;">👤 Utilizador de Login</span>
+                    <span style="font-size: 13px; font-weight: 800; color: #1a237e; font-family: monospace;">${currentUser.username}</span>
+                </div>
+
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 12px; font-weight: 700; color: #64748b;">📞 Telefone / WhatsApp</span>
+                    <span style="font-size: 13px; font-weight: 800; color: #0f172a;">${telefoneStr}</span>
+                </div>
+
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 14px;">
+                    <span style="font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; display: block; margin-bottom: 8px;">📍 HUBs de Atuação</span>
+                    <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                        ${chipsHubs}
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    document.getElementById('modalMeuPerfilUsuario').classList.add('show');
+}
 
 function mascaraTelefoneInput(input) {
     let v = String(input.value || '').replace(/\D/g, '').substring(0, 11);
@@ -687,7 +882,6 @@ function abrirModalConfiguracoes(topicoInicial = 'equipe') {
     document.getElementById('equipeModal').classList.add('show');
 }
 
-// Mantém compatibilidade com chamadas antigas
 function abrirModalEquipe() {
     abrirModalConfiguracoes('equipe');
 }
@@ -731,6 +925,7 @@ function filtrarListaColaboradores() {
     const filtrados = cacheColaboradoresEquipe.filter(u => {
         if (!termo) return true;
         return (
+            String(u.nome_completo || '').toLowerCase().includes(termo) ||
             String(u.username || '').toLowerCase().includes(termo) ||
             String(u.cargo || '').toLowerCase().includes(termo) ||
             String(u.hubs || '').toLowerCase().includes(termo) ||
@@ -748,7 +943,8 @@ function filtrarListaColaboradores() {
     }
 
     cont.innerHTML = filtrados.map(u => {
-        const letra = String(u.username || 'U').trim().charAt(0).toUpperCase();
+        const nomePrincipal = u.nome_completo ? u.nome_completo : u.username;
+        const letra = String(nomePrincipal || 'U').trim().charAt(0).toUpperCase();
         const telStr = u.telefone ? `📞 ${u.telefone}` : `<span style="color:#94a3b8;">Sem telefone</span>`;
         const uEsc = String(u.username || '').replace(/'/g, "\\'");
 
@@ -760,7 +956,8 @@ function filtrarListaColaboradores() {
                     </div>
                     <div>
                         <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-                            <b style="color: #0f172a; font-size: 14px;">${u.username}</b>
+                            <b style="color: #0f172a; font-size: 14px;">${nomePrincipal}</b>
+                            <span style="font-size: 11.5px; color: #64748b; font-family: monospace; font-weight: 700;">(@${u.username})</span>
                             <span style="background: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; padding: 1px 7px; border-radius: 10px; font-size: 10.5px; font-weight: 800;">
                                 ${u.cargo}
                             </span>
@@ -793,47 +990,57 @@ function abrirFichaColaborador(usernameAlvo) {
     if (visaoFicha) visaoFicha.style.display = 'block';
 
     const inpOriginal = document.getElementById('eq-original-user');
+    const inpNome = document.getElementById('eq-nome');
     const inpUser = document.getElementById('eq-user');
     const inpTel = document.getElementById('eq-telefone');
     const inpPwd = document.getElementById('eq-pwd');
     const selCargo = document.getElementById('eq-cargo');
-    const inpHubs = document.getElementById('eq-hubs');
     const badgeModo = document.getElementById('badge-modo-ficha');
 
-    // Libera a edição do campo de utilizador sempre!
     inpUser.removeAttribute('readonly');
     inpUser.style.backgroundColor = "#f8fafc";
+    hubsMarcadosFicha.clear();
 
     if (usernameAlvo) {
         const colab = cacheColaboradoresEquipe.find(x => x.username === usernameAlvo) || {
             username: usernameAlvo,
+            nome_completo: '',
             cargo: 'ANALISTA',
             hubs: 'TODOS',
             telefone: ''
         };
         inpOriginal.value = colab.username;
+        if (inpNome) inpNome.value = colab.nome_completo || '';
         inpUser.value = colab.username;
         inpTel.value = colab.telefone || '';
         inpPwd.value = '';
         inpPwd.placeholder = "Nova senha (Vazio = Manter senha atual)";
         selCargo.value = colab.cargo || 'ANALISTA';
-        inpHubs.value = colab.hubs || 'TODOS';
 
-        document.getElementById('titulo-form-equipe').innerText = `✏️ Editando: ${colab.username}`;
+        const hubsAtuais = String(colab.hubs || 'TODOS').toUpperCase().split(',').map(x => x.trim()).filter(Boolean);
+        if (hubsAtuais.length === 0 || hubsAtuais.includes('TODOS')) {
+            hubsMarcadosFicha.add('TODOS');
+        } else {
+            hubsAtuais.forEach(h => hubsMarcadosFicha.add(h));
+        }
+
+        const nomeTitulo = colab.nome_completo || colab.username;
+        document.getElementById('titulo-form-equipe').innerText = `✏️ Editando: ${nomeTitulo}`;
         if (badgeModo) {
             badgeModo.innerText = "EDITANDO COLABORADOR";
             badgeModo.style.background = "#fef3c7";
             badgeModo.style.color = "#b45309";
         }
-        atualizarAvatarFicha(colab.username);
+        atualizarAvatarFicha(nomeTitulo);
     } else {
         inpOriginal.value = '';
+        if (inpNome) inpNome.value = '';
         inpUser.value = '';
         inpTel.value = '';
         inpPwd.value = '';
         inpPwd.placeholder = "Defina a palavra-passe de acesso";
         selCargo.value = 'ANALISTA';
-        inpHubs.value = 'TODOS';
+        hubsMarcadosFicha.add('TODOS');
 
         document.getElementById('titulo-form-equipe').innerText = "➕ Novo Colaborador";
         if (badgeModo) {
@@ -843,6 +1050,8 @@ function abrirFichaColaborador(usernameAlvo) {
         }
         atualizarAvatarFicha('');
     }
+
+    renderizarSeletorHubsFicha();
 }
 
 function voltarParaListaEquipe() {
@@ -854,11 +1063,14 @@ function voltarParaListaEquipe() {
 
 function salvarUsuario() {
     const uOriginal = document.getElementById('eq-original-user')?.value.trim() || "";
+    const nomeCompleto = document.getElementById('eq-nome')?.value.trim() || "";
     const u = document.getElementById('eq-user').value.trim();
     const tel = document.getElementById('eq-telefone')?.value.trim() || "";
     const p = document.getElementById('eq-pwd').value;
     const c = document.getElementById('eq-cargo').value;
-    const h = document.getElementById('eq-hubs').value.trim().toUpperCase() || "TODOS";
+
+    const isTodos = hubsMarcadosFicha.size === 0 || hubsMarcadosFicha.has('TODOS');
+    const h = isTodos ? "TODOS" : Array.from(hubsMarcadosFicha).join(', ');
 
     if (!u) return alert("Preencha o nome de utilizador (login)!");
     if (currentUser.cargo === 'COORDENADOR' && (c === 'GERENTE' || c === 'COORDENADOR')) {
@@ -871,6 +1083,7 @@ function salvarUsuario() {
         body: JSON.stringify({
             original_username: uOriginal,
             username: u,
+            nome_completo: nomeCompleto,
             password: p,
             cargo: c,
             hubs: h,
@@ -882,17 +1095,18 @@ function salvarUsuario() {
         if (!res.sucesso) {
             return alert("❌ Erro: " + (res.erro || "Não foi possível salvar."));
         }
-        // Se o próprio usuário logado alterou o seu username ou HUB, atualiza a sessão atual
         if (uOriginal && currentUser && currentUser.username === uOriginal) {
             currentUser.username = u;
+            currentUser.nome_completo = nomeCompleto;
             currentUser.cargo = c;
             currentUser.hubs = h;
             currentUser.telefone = tel;
             sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
-            document.getElementById('nome-usuario-logado').innerHTML = `👤 ${currentUser.username.toUpperCase()}`;
-            document.getElementById('menu-nome').innerText = currentUser.username.toUpperCase();
+            const nomeTopo = (currentUser.nome_completo || currentUser.username).toUpperCase();
+            document.getElementById('nome-usuario-logado').innerHTML = `👤 ${nomeTopo}`;
+            document.getElementById('menu-nome').innerText = nomeTopo;
         }
-        mostrarToastRobo(`✅ Colaborador '${u}' salvo com sucesso!`);
+        mostrarToastRobo(`✅ Colaborador '${nomeCompleto || u}' salvo com sucesso!`);
         carregarListaColaboradores();
         voltarParaListaEquipe();
     });

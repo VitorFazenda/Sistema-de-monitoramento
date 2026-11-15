@@ -1038,3 +1038,65 @@ html, body { height: 100%; margin: 0; padding: 0; font-family: 'Segoe UI', Tahom
     flex-direction: column;
     gap: 8px;
 }
+
+/* ========================================== */
+/* SELETOR MULTI-HUB NA FICHA E MENU PERFIL   */
+/* ========================================== */
+.user-menu-info {
+    cursor: pointer;
+    transition: background 0.2s ease;
+}
+.user-menu-info:hover {
+    background: #eff6ff !important;
+}
+
+.ficha-hubs-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(115px, 1fr));
+    gap: 8px;
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 12px;
+    max-height: 155px;
+    overflow-y: auto;
+}
+
+.hub-check-card {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+    color: #334155;
+    user-select: none;
+    transition: all 0.15s ease;
+}
+.hub-check-card:hover {
+    border-color: #94a3b8;
+    background: #f1f5f9;
+}
+.hub-check-card.marcado {
+    background: #eff6ff;
+    border-color: #2563eb;
+    color: #1e3a8a;
+    font-weight: 800;
+    box-shadow: 0 1px 3px rgba(37, 99, 235, 0.15);
+}
+.hub-check-card.todos-card.marcado {
+    background: #dcfce7;
+    border-color: #16a34a;
+    color: #14532d;
+}
+.hub-check-card input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    accent-color: #1a237e;
+    cursor: pointer;
+    margin: 0;
+}

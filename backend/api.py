@@ -126,25 +126,6 @@ def ao_iniciar_api():
 # ==========================================
 # GESTÃO DE USUÁRIOS, LOGIN E ALERTAS DO SISTEMA
 # ==========================================
-def garantir_tabela_usuarios():
-  with motor_db.begin() as conn:
-    conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS usuarios (
-                id SERIAL PRIMARY KEY,
-                username VARCHAR(50) UNIQUE NOT NULL,
-                password VARCHAR(50) NOT NULL,
-                cargo VARCHAR(50) NOT NULL,
-                hubs_atribuidos VARCHAR(255),
-                telefone VARCHAR(50) DEFAULT ''
-            )
-        """))
-    conn.execute(
-        text(
-            "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS telefone VARCHAR(50)"
-            " DEFAULT ''"
-        )
-    )
-
 
 DURACAO_ALERTA_SEGUNDOS = 12 * 3600  # 12 horas (43.200 segundos)
 
@@ -370,15 +351,44 @@ def deletar_alerta_sistema(alerta_id: int):
     return {"sucesso": False, "erro": str(e)}
 
 
+def garantir_tabela_usuarios():
+  with motor_db.begin() as conn:
+    conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS usuarios (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(50) UNIQUE NOT NULL,
+                password VARCHAR(50) NOT NULL,
+                cargo VARCHAR(50) NOT NULL,
+                hubs_atribuidos VARCHAR(255),
+                telefone VARCHAR(50) DEFAULT '',
+                nome_completo VARCHAR(150) DEFAULT ''
+            )
+        """))
+    conn.execute(
+        text(
+            "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS telefone VARCHAR(50)"
+            " DEFAULT ''"
+        )
+    )
+    conn.execute(
+        text(
+            "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS nome_completo"
+            " VARCHAR(150) DEFAULT ''"
+        )
+    )
+
+
 @app.post("/login")
 async def fazer_login(request: Request):
   dados = await request.json()
   try:
     garantir_tabela_usuarios()
-    query = text(
-        "SELECT username, cargo, hubs_atribuidos, COALESCE(telefone, '') FROM"
-        " usuarios WHERE username = :u AND password = :p"
-    )
+    query = text("""
+            SELECT username, cargo, hubs_atribuidos,
+                   COALESCE(telefone, ''), COALESCE(nome_completo, '')
+            FROM usuarios
+            WHERE username = :u AND password = :p
+        """)
     with motor_db.connect() as conn:
       resultado = conn.execute(
           query, {"u": dados.get("username"), "p": dados.get("password")}
@@ -392,6 +402,7 @@ async def fazer_login(request: Request):
                 "cargo": resultado[1],
                 "hubs": resultado[2],
                 "telefone": resultado[3] or "",
+                "nome_completo": resultado[4] or "",
             },
         }
       return {"sucesso": False, "erro": "Usuário ou senha incorretos."}
@@ -404,18 +415,19 @@ def listar_usuarios():
   try:
     garantir_tabela_usuarios()
     with motor_db.connect() as conn:
-      result = conn.execute(
-          text(
-              "SELECT username, cargo, hubs_atribuidos, COALESCE(telefone, '')"
-              " FROM usuarios ORDER BY LOWER(username)"
-          )
-      ).fetchall()
+      result = conn.execute(text("""
+                SELECT username, cargo, hubs_atribuidos,
+                       COALESCE(telefone, ''), COALESCE(nome_completo, '')
+                FROM usuarios
+                ORDER BY LOWER(COALESCE(NULLIF(nome_completo, ''), username))
+            """)).fetchall()
       return [
           {
               "username": r[0],
               "cargo": r[1],
               "hubs": r[2],
               "telefone": r[3] or "",
+              "nome_completo": r[4] or "",
           }
           for r in result
       ]
@@ -428,18 +440,18 @@ async def add_usuario(request: Request):
   dados = await request.json()
   u = str(dados.get("username", "")).strip()
   u_original = str(dados.get("original_username", "")).strip()
+  nome_completo = str(dados.get("nome_completo", "")).strip()
   p = str(dados.get("password", "")).strip()
   c = str(dados.get("cargo", "ANALISTA")).strip()
   h = str(dados.get("hubs", "TODOS")).strip() or "TODOS"
   tel = str(dados.get("telefone", "")).strip()
 
   if not u:
-    return {"sucesso": False, "erro": "O nome de utilizador é obrigatório."}
+    return {"sucesso": False, "erro": "O nome de utilizador (login) é obrigatório."}
 
   try:
     garantir_tabela_usuarios()
     with motor_db.begin() as conn:
-      # Caso esteja editando um colaborador existente (mesmo que tenha trocado o username)
       if u_original:
         if u.lower() != u_original.lower():
           ja_existe = conn.execute(
@@ -458,23 +470,39 @@ async def add_usuario(request: Request):
         if p:
           conn.execute(
               text("""
-                            UPDATE usuarios
-                            SET username = :u, password = :p, cargo = :c, hubs_atribuidos = :h, telefone = :t
-                            WHERE username = :uo
-                        """),
-              {"u": u, "p": p, "c": c, "h": h, "t": tel, "uo": u_original},
+                        UPDATE usuarios
+                        SET username = :u, nome_completo = :nc, password = :p,
+                            cargo = :c, hubs_atribuidos = :h, telefone = :t
+                        WHERE username = :uo
+                    """),
+              {
+                  "u": u,
+                  "nc": nome_completo,
+                  "p": p,
+                  "c": c,
+                  "h": h,
+                  "t": tel,
+                  "uo": u_original,
+              },
           )
         else:
           conn.execute(
               text("""
-                            UPDATE usuarios
-                            SET username = :u, cargo = :c, hubs_atribuidos = :h, telefone = :t
-                            WHERE username = :uo
-                        """),
-              {"u": u, "c": c, "h": h, "t": tel, "uo": u_original},
+                        UPDATE usuarios
+                        SET username = :u, nome_completo = :nc,
+                            cargo = :c, hubs_atribuidos = :h, telefone = :t
+                        WHERE username = :uo
+                    """),
+              {
+                  "u": u,
+                  "nc": nome_completo,
+                  "c": c,
+                  "h": h,
+                  "t": tel,
+                  "uo": u_original,
+              },
           )
       else:
-        # Novo colaborador
         count = conn.execute(
             text(
                 "SELECT count(*) FROM usuarios WHERE LOWER(username) ="
@@ -495,12 +523,19 @@ async def add_usuario(request: Request):
 
         conn.execute(
             text("""
-                        INSERT INTO usuarios (username, password, cargo, hubs_atribuidos, telefone)
-                        VALUES (:u, :p, :c, :h, :t)
-                    """),
-            {"u": u, "p": p, "c": c, "h": h, "t": tel},
+                    INSERT INTO usuarios (username, nome_completo, password, cargo, hubs_atribuidos, telefone)
+                    VALUES (:u, :nc, :p, :c, :h, :t)
+                """),
+            {
+                "u": u,
+                "nc": nome_completo,
+                "p": p,
+                "c": c,
+                "h": h,
+                "t": tel,
+            },
         )
-    return {"sucesso": True, "username": u}
+    return {"sucesso": True, "username": u, "nome_completo": nome_completo}
   except Exception as e:
     return {"sucesso": False, "erro": str(e)}
 

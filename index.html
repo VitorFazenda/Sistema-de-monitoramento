@@ -52,10 +52,15 @@
             <div class="user-profile" onclick="document.getElementById('userMenu').classList.toggle('show')">
                 <div class="user-bubble" id="nome-usuario-logado">👤 User</div>
                 <div id="userMenu" class="user-menu-dropdown">
-                    <div class="user-menu-info">
+                    <div id="userMenu" class="user-menu-dropdown">
+                    <div class="user-menu-info" onclick="abrirModalMeuPerfil(event)" title="Clique para visualizar suas informações de perfil">
                         <div class="user-menu-nome" id="menu-nome">User</div>
                         <div class="user-menu-cargo" id="menu-cargo">CARGO</div>
+                        <div style="font-size: 10px; color: #0284c7; font-weight: 700; margin-top: 4px;">👤 Ver meu perfil →</div>
                     </div>
+                    <button class="user-menu-btn" onclick="abrirModalConfiguracoes()">⚙️ Configurações</button>
+                    <button class="user-menu-btn sair" onclick="fazerLogoff()">🚪 Sair do Sistema</button>
+                </div>
                     <button class="user-menu-btn" onclick="abrirModalConfiguracoes()">⚙️ Configurações</button>
                     <button class="user-menu-btn sair" onclick="fazerLogoff()">🚪 Sair do Sistema</button>
                 </div>
@@ -187,7 +192,7 @@
                     <!-- SELETOR DE COLUNAS VISÍVEIS (PERSONALIZADO POR PERFIL) -->
                     <div class="colunas-dropdown-wrap" id="colunas-planilha-wrap" style="position: relative; display: inline-block;">
                         <button type="button" class="btn-acao" onclick="toggleMenuColunasPlanilha(event)" style="background-color: #f1f5f9; color: #1e293b; border-color: #cbd5e1; font-weight: bold;">
-                            👁️ <span id="label-btn-colunas-planilha">Colunas</span> ▼
+                             <span id="label-btn-colunas-planilha">Colunas</span> ▼
                         </button>
                         <div id="menu-colunas-planilha" style="display: none; position: absolute; top: 112%; left: 0; min-width: 240px; max-height: 360px; overflow-y: auto; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.18); z-index: 2600; padding: 10px;">
                             <div style="display: flex; gap: 6px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #e2e8f0;">
@@ -1004,7 +1009,7 @@
                         <span>🔔</span>
                         <div>
                             <div class="t-nome">Gerenciar Alertas</div>
-                            <div class="t-desc">Avisos ao abrir o sistema e Okta</div>
+                            <div class="t-desc">Avisos aos usuários</div>
                         </div>
                     </button>
                 </div>
@@ -1058,8 +1063,13 @@
 
                                 <div class="ficha-grid-form">
                                     <div>
+                                        <label class="robo-label">🪪 NOME DO COLABORADOR</label>
+                                        <input type="text" id="eq-nome" class="login-input" placeholder="Ex: Gabriel Rodrigues" oninput="atualizarAvatarFicha(this.value || document.getElementById('eq-user').value)">
+                                    </div>
+
+                                    <div>
                                         <label class="robo-label">👤 NOME DE UTILIZADOR (LOGIN)</label>
-                                        <input type="text" id="eq-user" class="login-input" placeholder="Ex: joao.silva" oninput="atualizarAvatarFicha(this.value)">
+                                        <input type="text" id="eq-user" class="login-input" placeholder="Ex: Gabriel.rodrigues" oninput="if(!document.getElementById('eq-nome').value) atualizarAvatarFicha(this.value)">
                                     </div>
 
                                     <div>
@@ -1072,9 +1082,9 @@
                                         <input type="password" id="eq-pwd" class="login-input" placeholder="Nova senha (Vazio = Não alterar)">
                                     </div>
 
-                                    <div>
+                                    <div style="grid-column: 1 / -1;">
                                         <label class="robo-label">👔 CARGO E PERMISSÕES</label>
-                                        <select id="eq-cargo" class="login-input" style="cursor: pointer;">
+                                        <select id="eq-cargo" class="login-input" style="cursor: pointer; margin-bottom: 4px;">
                                             <option value="GERENTE">👑 Gerente (Acesso Total)</option>
                                             <option value="COORDENADOR">👔 Coordenador (Edita Escalas e Tickets)</option>
                                             <option value="ANALISTA">📊 Analista (Opera apenas seu HUB)</option>
@@ -1084,8 +1094,15 @@
                                     </div>
 
                                     <div style="grid-column: 1 / -1;">
-                                        <label class="robo-label">📍 HUBS DE ATUAÇÃO</label>
-                                        <input type="text" id="eq-hubs" class="login-input" placeholder="Ex: TODOS ou BRXSP16, BRXSP10, ARENA" style="text-transform: uppercase;" oninput="this.value = this.value.toUpperCase();">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 8px;">
+                                            <label class="robo-label" style="margin-bottom: 0;">📍 HUBS DE ATUAÇÃO (SELECIONE UM OU MAIS)</label>
+                                            <div style="display: flex; gap: 6px; align-items: center;">
+                                                <input type="text" id="eq-novo-hub-custom" placeholder="+ Outra sigla HUB..." style="padding: 4px 8px; border: 1px solid #cbd5e1; border-radius: 5px; font-size: 11px; font-weight: 700; width: 130px; text-transform: uppercase;" oninput="this.value = this.value.toUpperCase()" onkeypress="if(event.key==='Enter'){ event.preventDefault(); adicionarHubCustomizadoFicha(); }">
+                                                <button type="button" onclick="adicionarHubCustomizadoFicha()" style="background: #e0f2fe; color: #0284c7; border: 1px solid #bae6fd; border-radius: 5px; padding: 4px 8px; font-size: 11px; font-weight: 800; cursor: pointer;">➕ Incluir</button>
+                                            </div>
+                                        </div>
+                                        <input type="hidden" id="eq-hubs" value="TODOS">
+                                        <div id="eq-hubs-checkboxes-container" class="ficha-hubs-grid"></div>
                                     </div>
                                 </div>
 
@@ -1171,7 +1188,7 @@
 
                                 <div style="display: flex; gap: 8px;">
                                     <button id="btn-cancelar-edicao-alerta" class="btn-footer-cancel" style="display: none; padding: 8px 14px;" onclick="limparFormularioAlerta()">Cancelar</button>
-                                    <button class="btn-salvar-robo" style="width: auto; padding: 8px 18px;" onclick="salvarAlertaSistema()">🔔 Salvar e Publicar (12h)</button>
+                                    <button class="btn-salvar-robo" style="width: auto; padding: 8px 18px;" onclick="salvarAlertaSistema()">🔔 Salvar e Publicar</button>
                                 </div>
                             </div>
                         </div>
