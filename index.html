@@ -56,7 +56,7 @@
                         <div class="user-menu-nome" id="menu-nome">User</div>
                         <div class="user-menu-cargo" id="menu-cargo">CARGO</div>
                     </div>
-                    <button class="user-menu-btn" onclick="abrirModalEquipe()">⚙️ Gerenciar Equipe</button>
+                    <button class="user-menu-btn" onclick="abrirModalConfiguracoes()">⚙️ Configurações</button>
                     <button class="user-menu-btn sair" onclick="fazerLogoff()">🚪 Sair do Sistema</button>
                 </div>
             </div>
@@ -889,7 +889,7 @@
                         </span>
                     </div>
                     <div class="terminal-body" id="terminal-logs">
-                        <span style="color: #94a3b8;">[SISTEMA]</span> Painel de controlo inicializado.<br>
+                        <span style="color: #94a3b8;">[SISTEMA]</span> Painel de controle inicializado.<br>
                     </div>
                 </div>
             </div>
@@ -968,36 +968,197 @@
         </div>
     </div>
 
-    <!-- MODAL GESTÃO DE EQUIPA -->
+    <!-- MODAL CENTRAL DE CONFIGURAÇÕES (TÓPICOS + PAINEL CENTRAL) -->
     <div id="equipeModal" class="modal-overlay">
-        <div class="modal-content" style="width: 800px; max-width: 95%;">
+        <div class="modal-content config-modal-shell">
             <div class="modal-header">
-                👥 Gestão de Equipa e Permissões
-                <span style="cursor:pointer; opacity:0.8;" onclick="document.getElementById('equipeModal').classList.remove('show')">❌</span>
+                <span>⚙️ Configurações do Sistema</span>
+                <span style="cursor:pointer; opacity:0.85;" onclick="fecharModalConfiguracoes()">❌</span>
             </div>
-            <div class="modal-equipa-body">
-                <div class="equipa-lista-container">
-                    <div class="equipa-lista-header">Utilizadores Cadastrados</div>
-                    <div id="lista-usuarios" class="equipa-lista-scroll"></div>
+
+            <div class="config-modal-body">
+                <!-- MENU LATERAL DE TÓPICOS -->
+                <div class="config-sidebar">
+                    <div class="config-sidebar-title">TÓPICOS</div>
+                    <button class="config-topic-btn ativo" id="btn-topico-equipe" onclick="mudarTopicoConfiguracoes('equipe')">
+                        <span>👥</span>
+                        <div>
+                            <div class="t-nome">Gestão de Equipe</div>
+                            <div class="t-desc">Colaboradores, logins e cargos</div>
+                        </div>
+                    </button>
+                    <button class="config-topic-btn" id="btn-topico-alertas" onclick="mudarTopicoConfiguracoes('alertas')">
+                        <span>🔔</span>
+                        <div>
+                            <div class="t-nome">Gerenciar Alertas</div>
+                            <div class="t-desc">Avisos ao abrir o sistema e Okta</div>
+                        </div>
+                    </button>
                 </div>
-                <div class="equipa-form-container">
-                    <h4 id="titulo-form-equipe" style="margin-top:0; color:#1a237e; border-bottom:2px solid #f1f5f9; padding-bottom:10px;">➕ Novo Utilizador</h4>
-                    <label class="robo-label">NOME DE UTILIZADOR (LOGIN)</label>
-                    <input type="text" id="eq-user" class="login-input" placeholder="Ex: joao.silva">
-                    <label class="robo-label">PALAVRA-PASSE</label>
-                    <input type="password" id="eq-pwd" class="login-input" placeholder="Nova senha (Vazio = Não alterar)">
-                    <label class="robo-label">CARGO E PERMISSÕES</label>
-                    <select id="eq-cargo" class="login-input" style="cursor: pointer;">
-                        <option value="GERENTE">👑 Gerente (Acesso Total)</option>
-                        <option value="COORDENADOR">👔 Coordenador (Edita Escalas e Tickets)</option>
-                        <option value="ANALISTA">📊 Analista (Opera apenas seu HUB)</option>
-                        <option value="MONITOR GRAU 2">🔎 Monitor Grau 2 (Visão de HUBs, Opera o seu)</option>
-                        <option value="MONITOR GRAU 1">🔎 Monitor Grau 1 (Somente Leitura)</option>
-                    </select>
-                    <label class="robo-label">HUBS ATRIBUÍDOS</label>
-                    <input type="text" id="eq-hubs" class="login-input" placeholder="Ex: TODOS ou BRXSP16, BRXSP10" style="text-transform: uppercase;" oninput="this.value = this.value.toUpperCase();">
-                    <button class="btn-salvar-robo" style="margin-bottom: 10px;" onclick="salvarUsuario()">💾 Salvar Informações</button>
-                    <button class="btn-footer-cancel" style="width: 100%; justify-content:center; text-align:center;" onclick="limparFormularioUsuario()">🔄 Limpar / Novo</button>
+
+                <!-- ÁREA CENTRAL DE CONTEÚDO DOS TÓPICOS -->
+                <div class="config-main-area">
+
+                    <!-- ================= TÓPICO 1: GESTÃO DE EQUIPE ================= -->
+                    <div id="config-painel-equipe" class="config-topic-panel ativo">
+                        
+                        <!-- VISÃO 1: PESQUISA + LISTA DE COLABORADORES -->
+                        <div id="equipe-visao-lista">
+                            <div class="config-section-header">
+                                <div>
+                                    <h3>👥 Colaboradores Cadastrados</h3>
+                                    <p>Pesquise um colaborador abaixo ou clique em Editar para abrir a ficha completa.</p>
+                                </div>
+                                <button class="btn-novo-colaborador" onclick="abrirFichaColaborador(null)">
+                                    ➕ Novo Colaborador
+                                </button>
+                            </div>
+
+                            <div class="equipe-search-bar">
+                                <span>🔍</span>
+                                <input type="text" id="input-pesquisa-equipe" placeholder="Pesquisar por utilizador, cargo, HUB ou telefone..." oninput="filtrarListaColaboradores()">
+                                <span id="badge-total-colaboradores" class="equipe-count-badge">0 colaboradores</span>
+                            </div>
+
+                            <div id="lista-usuarios" class="equipe-lista-moderna"></div>
+                        </div>
+
+                        <!-- VISÃO 2: TELA PERSONALIZADA DE EDIÇÃO / CADASTRO DO COLABORADOR -->
+                        <div id="equipe-visao-ficha" style="display: none;">
+                            <div class="ficha-topbar">
+                                <button class="btn-voltar-lista" onclick="voltarParaListaEquipe()">
+                                    ← Voltar para a lista
+                                </button>
+                                <span id="badge-modo-ficha" class="ficha-mode-badge">EDITANDO COLABORADOR</span>
+                            </div>
+
+                            <div class="ficha-card">
+                                <div class="ficha-user-header">
+                                    <div class="ficha-avatar" id="ficha-avatar-letra">👤</div>
+                                    <div>
+                                        <h3 id="titulo-form-equipe" style="margin: 0; color: #0f172a; font-size: 18px;">Editar Colaborador</h3>
+                                        <p id="subtitulo-form-equipe" style="margin: 3px 0 0 0; color: #64748b; font-size: 12.5px;">Altere o login, telefone, palavra-passe, cargo ou HUBs de atuação.</p>
+                                    </div>
+                                </div>
+
+                                <input type="hidden" id="eq-original-user" value="">
+
+                                <div class="ficha-grid-form">
+                                    <div>
+                                        <label class="robo-label">👤 NOME DE UTILIZADOR (LOGIN)</label>
+                                        <input type="text" id="eq-user" class="login-input" placeholder="Ex: joao.silva" oninput="atualizarAvatarFicha(this.value)">
+                                    </div>
+
+                                    <div>
+                                        <label class="robo-label">📞 TELEFONE / WHATSAPP</label>
+                                        <input type="text" id="eq-telefone" class="login-input" placeholder="Ex: (11) 99999-9999" maxlength="16" oninput="mascaraTelefoneInput(this)">
+                                    </div>
+
+                                    <div>
+                                        <label class="robo-label">🔑 PALAVRA-PASSE</label>
+                                        <input type="password" id="eq-pwd" class="login-input" placeholder="Nova senha (Vazio = Não alterar)">
+                                    </div>
+
+                                    <div>
+                                        <label class="robo-label">👔 CARGO E PERMISSÕES</label>
+                                        <select id="eq-cargo" class="login-input" style="cursor: pointer;">
+                                            <option value="GERENTE">👑 Gerente (Acesso Total)</option>
+                                            <option value="COORDENADOR">👔 Coordenador (Edita Escalas e Tickets)</option>
+                                            <option value="ANALISTA">📊 Analista (Opera apenas seu HUB)</option>
+                                            <option value="MONITOR GRAU 2">🔎 Monitor Grau 2 (Visão de HUBs, Opera o seu)</option>
+                                            <option value="MONITOR GRAU 1">🔎 Monitor Grau 1 (Somente Leitura)</option>
+                                        </select>
+                                    </div>
+
+                                    <div style="grid-column: 1 / -1;">
+                                        <label class="robo-label">📍 HUBS DE ATUAÇÃO</label>
+                                        <input type="text" id="eq-hubs" class="login-input" placeholder="Ex: TODOS ou BRXSP16, BRXSP10, ARENA" style="text-transform: uppercase;" oninput="this.value = this.value.toUpperCase();">
+                                    </div>
+                                </div>
+
+                                <div class="ficha-footer-actions">
+                                    <button class="btn-footer-cancel" onclick="voltarParaListaEquipe()">Cancelar</button>
+                                    <button class="btn-salvar-robo" style="width: auto; padding: 10px 24px;" onclick="salvarUsuario()">💾 Salvar Alterações</button>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- ================= TÓPICO 2: GERENCIAR ALERTAS ================= -->
+                    <div id="config-painel-alertas" class="config-topic-panel">
+                        <div class="config-section-header">
+                            <div>
+                                <h3>🔔 Gerenciador de Alertas do Sistema</h3>
+                                <p>Configure avisos que disparam automaticamente ao abrir o sistema e ficam disponíveis na Caixa de Mensagens (✉️).</p>
+                            </div>
+                        </div>
+
+                        <!-- STATUS DO ALERTA AUTOMÁTICO OKTA -->
+                        <div class="alerta-okta-status-box">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span style="font-size: 20px;">🔐</span>
+                                <div>
+                                    <div style="font-weight: 800; font-size: 13px; color: #0f172a;">Alerta Automático de Sessão Okta Verify</div>
+                                    <div style="font-size: 11.5px; color: #475569;">Monitorado automaticamente pelo robô quando a sessão do Mercado Livre pede validação de 6 dígitos.</div>
+                                </div>
+                            </div>
+                            <span style="background: #dcfce7; color: #15803d; border: 1px solid #86efac; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 800; white-space: nowrap;">
+                                ⚡ AUTOMÁTICO ATIVO
+                            </span>
+                        </div>
+
+                        <!-- FORMULÁRIO DE NOVO / EDITAR ALERTA -->
+                        <div class="alerta-form-box">
+                            <h4 id="titulo-form-alerta" style="margin: 0 0 12px 0; color: #1a237e; font-size: 14px;">📢 Criar / Disparar Novo Alerta</h4>
+                            <input type="hidden" id="alerta-edit-id" value="">
+
+                            <div style="display: grid; grid-template-columns: 1.5fr 1fr 1fr; gap: 10px; margin-bottom: 10px;">
+                                <div>
+                                    <label class="robo-label">TÍTULO DO ALERTA</label>
+                                    <input type="text" id="alerta-titulo" class="login-input" style="margin-bottom: 0; padding: 9px 10px;" placeholder="Ex: Atenção no fechamento das rotas">
+                                </div>
+                                <div>
+                                    <label class="robo-label">NÍVEL DE DESTAQUE</label>
+                                    <select id="alerta-prioridade" class="login-input" style="margin-bottom: 0; padding: 9px 10px; cursor: pointer; font-weight: 700;">
+                                        <option value="INFO">ℹ️ Informativo (Azul)</option>
+                                        <option value="WARN">⚠️ Atenção (Amarelo)</option>
+                                        <option value="URGENTE">🚨 Urgente (Vermelho)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="robo-label">HUB DESTINATÁRIO</label>
+                                    <input type="text" id="alerta-hub" class="login-input" style="margin-bottom: 0; padding: 9px 10px; text-transform: uppercase;" placeholder="TODOS ou ex: BRXSP10" value="TODOS" oninput="this.value = this.value.toUpperCase();">
+                                </div>
+                            </div>
+
+                            <div style="margin-bottom: 10px;">
+                                <label class="robo-label">MENSAGEM DO ALERTA</label>
+                                <textarea id="alerta-mensagem" rows="2" class="login-input" style="margin-bottom: 0; padding: 9px 10px; resize: vertical; font-family: inherit;" placeholder="Digite o comunicado que aparecerá na tela dos colaboradores ao abrirem o sistema..."></textarea>
+                            </div>
+
+                            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                                <label style="display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 700; color: #1e293b; cursor: pointer;">
+                                    <input type="checkbox" id="alerta-exibir-abrir" checked style="width: 16px; height: 16px; accent-color: #1a237e; cursor: pointer;">
+                                    🚀 Disparar pop-up automaticamente ao abrir o sistema
+                                </label>
+
+                                <div style="display: flex; gap: 8px;">
+                                    <button id="btn-cancelar-edicao-alerta" class="btn-footer-cancel" style="display: none; padding: 8px 14px;" onclick="limparFormularioAlerta()">Cancelar</button>
+                                    <button class="btn-salvar-robo" style="width: auto; padding: 8px 18px;" onclick="salvarAlertaSistema()">🔔 Salvar e Publicar Alerta</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- LISTA DE ALERTAS CADASTRADOS -->
+                        <div style="margin-top: 14px;">
+                            <div style="font-size: 11.5px; font-weight: 800; color: #475569; text-transform: uppercase; margin-bottom: 8px;">
+                                📋 Alertas Cadastrados
+                            </div>
+                            <div id="lista-alertas-sistema" class="alertas-lista-scroll"></div>
+                        </div>
+                    </div>
+
                 </div>
             </div>
         </div>

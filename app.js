@@ -125,6 +125,7 @@ function comparadorDataBR(a, b) {
 // ==========================================
 let alertaOktaAtivo = false;
 let jaApitouNestaExpiracao = false;
+let listaAlertasSistema = [];
 
 function tocarAlarmeSonoroOkta() {
     try {
@@ -132,7 +133,6 @@ function tocarAlarmeSonoroOkta() {
         if (!AudioCtx) return;
         const ctx = new AudioCtx();
 
-        // Toca 2 bips curtos uma única vez para avisar que pediu Okta
         [0, 0.22].forEach(atraso => {
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
@@ -148,17 +148,41 @@ function tocarAlarmeSonoroOkta() {
     } catch (e) {}
 }
 
-function gerenciarAlertaCaixaMensagens(statusLogin, roboOnline) {
+function obterAlertasAtivosParaUsuario() {
+    if (!Array.isArray(listaAlertasSistema)) return [];
+    const meusHubs = (currentUser && currentUser.hubs && currentUser.hubs !== "TODOS")
+        ? currentUser.hubs.toUpperCase().split(',').map(h => h.trim()).filter(Boolean)
+        : null;
+
+    return listaAlertasSistema.filter(a => {
+        if (String(a.ativo || 'SIM').toUpperCase() !== 'SIM') return false;
+        const hubAlvo = String(a.hub_alvo || 'TODOS').toUpperCase().trim();
+        if (!meusHubs || hubAlvo === 'TODOS') return true;
+        return meusHubs.some(mh => hubAlvo.includes(mh));
+    });
+}
+
+function atualizarBadgeCaixaMensagens() {
     const btnInbox = document.getElementById('btn-caixa-mensagens');
     const bolinha = document.getElementById('bolinha-alerta-okta');
     if (!btnInbox || !bolinha) return;
 
+    const alertasUsuario = obterAlertasAtivosParaUsuario();
+    const totalAlertas = (alertaOktaAtivo ? 1 : 0) + alertasUsuario.length;
+
+    if (totalAlertas > 0) {
+        bolinha.style.display = 'flex';
+        bolinha.innerText = String(totalAlertas);
+        btnInbox.classList.add('alerta-ativo');
+    } else {
+        bolinha.style.display = 'none';
+        btnInbox.classList.remove('alerta-ativo');
+    }
+}
+
+function gerenciarAlertaCaixaMensagens(statusLogin, roboOnline) {
     if (roboOnline && statusLogin === 'AGUARDANDO_OKTA') {
         alertaOktaAtivo = true;
-        bolinha.style.display = 'flex';
-        btnInbox.classList.add('alerta-ativo');
-
-        // Apita APENAS UMA VEZ quando pedir o código Okta e NÃO abre o pop-up sozinho!
         if (!jaApitouNestaExpiracao) {
             jaApitouNestaExpiracao = true;
             tocarAlarmeSonoroOkta();
@@ -166,9 +190,32 @@ function gerenciarAlertaCaixaMensagens(statusLogin, roboOnline) {
     } else {
         alertaOktaAtivo = false;
         jaApitouNestaExpiracao = false;
-        bolinha.style.display = 'none';
-        btnInbox.classList.remove('alerta-ativo');
     }
+    atualizarBadgeCaixaMensagens();
+}
+
+function carregarAlertasSistema(verificarDisparoAoAbrir = false) {
+    fetch(`${API_BASE_URL}/alertas_sistema`)
+        .then(r => r.json())
+        .then(dados => {
+            listaAlertasSistema = Array.isArray(dados) ? dados : [];
+            atualizarBadgeCaixaMensagens();
+            renderizarListaAlertasConfig();
+
+            if (verificarDisparoAoAbrir) {
+                const alertasAoAbrir = obterAlertasAtivosParaUsuario().filter(
+                    a => String(a.exibir_ao_abrir || 'SIM').toUpperCase() === 'SIM'
+                );
+                if (alertasAoAbrir.length > 0) {
+                    const chaveSessao = `alertas_vistos_${currentUser ? currentUser.username : 'anon'}_${alertasAoAbrir.map(x => x.id).join('_')}`;
+                    if (!sessionStorage.getItem(chaveSessao)) {
+                        sessionStorage.setItem(chaveSessao, '1');
+                        abrirModalMensagens();
+                    }
+                }
+            }
+        })
+        .catch(() => {});
 }
 
 function abrirModalMensagens() {
@@ -177,34 +224,67 @@ function abrirModalMensagens() {
     const corpo = document.getElementById('corpo-modal-mensagens');
     if (!modal || !corpo) return;
 
+    const alertasUsuario = obterAlertasAtivosParaUsuario();
+    let htmlBlocos = '';
+
     if (alertaOktaAtivo) {
-        if (header) header.style.background = '#dc2626';
-        corpo.innerHTML = `
-            <div style="background: #fef2f2; border: 2px solid #ef4444; border-radius: 10px; padding: 16px; text-align: center; margin-bottom: 15px;">
-                <div style="font-size: 34px; margin-bottom: 8px;">🚨</div>
-                <h3 style="margin: 0 0 8px 0; color: #991b1b; font-size: 16px;">Atenção: Autenticação Necessária!</h3>
-                <p style="margin: 0; color: #b91c1c; font-size: 14px; font-weight: 700; line-height: 1.5;">
+        htmlBlocos += `
+            <div style="background: #fef2f2; border: 2px solid #ef4444; border-radius: 10px; padding: 16px; text-align: center; margin-bottom: 14px;">
+                <div style="font-size: 32px; margin-bottom: 6px;">🚨</div>
+                <h3 style="margin: 0 0 6px 0; color: #991b1b; font-size: 15.5px;">Atenção: Autenticação Okta Necessária!</h3>
+                <p style="margin: 0 0 12px 0; color: #b91c1c; font-size: 13.5px; font-weight: 700;">
                     "A sessão expirou e precisa colocar o Okta para o robô voltar a trabalhar."
                 </p>
-            </div>
-            <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px;">
-                <label style="font-size: 11px; font-weight: 800; color: #1e293b; display: block; margin-bottom: 6px;">📲 ENVIAR CÓDIGO OKTA (6 DÍGITOS) DIRETO DAQUI:</label>
-                <div style="display: flex; gap: 8px;">
-                    <input type="text" id="input-codigo-okta-modal" maxlength="7" placeholder="Ex: 838683" style="flex: 1; padding: 9px; border: 1px solid #94a3b8; border-radius: 6px; font-weight: 800; font-size: 15px; text-align: center; letter-spacing: 2px;" onkeypress="if(event.key === 'Enter') enviarOktaPeloModal()">
-                    <button onclick="enviarOktaPeloModal()" style="background: #16a34a; color: white; border: none; padding: 9px 16px; border-radius: 6px; font-weight: 800; cursor: pointer;">
-                        🔑 Enviar Okta
-                    </button>
+                <div style="background: #ffffff; border: 1px solid #fca5a5; border-radius: 8px; padding: 12px; text-align: left;">
+                    <label style="font-size: 11px; font-weight: 800; color: #1e293b; display: block; margin-bottom: 6px;">📲 ENVIAR CÓDIGO OKTA (6 DÍGITOS) DIRETO DAQUI:</label>
+                    <div style="display: flex; gap: 8px;">
+                        <input type="text" id="input-codigo-okta-modal" maxlength="7" placeholder="Ex: 838683" style="flex: 1; padding: 8px; border: 1px solid #94a3b8; border-radius: 6px; font-weight: 800; font-size: 15px; text-align: center; letter-spacing: 2px;" onkeypress="if(event.key === 'Enter') enviarOktaPeloModal()">
+                        <button onclick="enviarOktaPeloModal()" style="background: #16a34a; color: white; border: none; padding: 8px 16px; border-radius: 6px; font-weight: 800; cursor: pointer;">
+                            🔑 Enviar Okta
+                        </button>
+                    </div>
                 </div>
             </div>
         `;
-    } else {
+    }
+
+    if (alertasUsuario.length > 0) {
+        htmlBlocos += alertasUsuario.map(a => {
+            const prio = String(a.prioridade || 'INFO').toUpperCase();
+            const cfg = prio === 'URGENTE'
+                ? { bg: '#fef2f2', border: '#ef4444', titleColor: '#991b1b', icon: '🚨', tag: 'URGENTE' }
+                : prio === 'WARN'
+                ? { bg: '#fffbeb', border: '#f59e0b', titleColor: '#92400e', icon: '⚠️', tag: 'ATENÇÃO' }
+                : { bg: '#f0f9ff', border: '#0284c7', titleColor: '#075985', icon: '📢', tag: 'COMUNICADO' };
+
+            return `
+                <div style="background: ${cfg.bg}; border: 1px solid ${cfg.border}; border-left: 5px solid ${cfg.border}; border-radius: 8px; padding: 14px; margin-bottom: 10px; text-align: left;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px;">
+                        <span style="font-weight: 800; font-size: 14px; color: ${cfg.titleColor};">${cfg.icon} ${a.titulo}</span>
+                        <span style="font-size: 10px; font-weight: 800; background: rgba(0,0,0,0.06); color: ${cfg.titleColor}; padding: 2px 8px; border-radius: 10px;">
+                            ${cfg.tag} · HUB: ${a.hub_alvo || 'TODOS'}
+                        </span>
+                    </div>
+                    <div style="font-size: 13px; color: #1e293b; line-height: 1.5; white-space: pre-wrap;">${a.mensagem}</div>
+                    <div style="font-size: 10.5px; color: #64748b; margin-top: 8px; text-align: right;">
+                        Publicado por <b>${a.criado_por || 'Gestão'}</b> ${a.data_criacao ? 'em ' + a.data_criacao : ''}
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    if (!htmlBlocos) {
         if (header) header.style.background = '#1a237e';
         corpo.innerHTML = `
             <div style="text-align: center; padding: 26px 10px;">
                 <div style="font-size: 36px; margin-bottom: 10px;">📭</div>
-                <h3 style="margin: 0; color: #1e293b; font-size: 16px;">Nenhuma mensagem de alerta!</h3>
+                <h3 style="margin: 0; color: #1e293b; font-size: 16px;">Nenhuma mensagem ou alerta ativo!</h3>
             </div>
         `;
+    } else {
+        if (header) header.style.background = alertaOktaAtivo ? '#dc2626' : '#1a237e';
+        corpo.innerHTML = `<div style="max-height: 65vh; overflow-y: auto; padding-right: 4px;">${htmlBlocos}</div>`;
     }
     modal.classList.add('show');
 }
@@ -496,32 +576,377 @@ function ordenarRotasPorSequencia(lista) {
 }
 
 // ==========================================
-// GESTÃO DE EQUIPA E METAS MENSAIS POR HUB
+// CENTRAL DE CONFIGURAÇÕES: GESTÃO DE EQUIPE E ALERTAS
 // ==========================================
+let cacheColaboradoresEquipe = [];
+
+function mascaraTelefoneInput(input) {
+    let v = String(input.value || '').replace(/\D/g, '').substring(0, 11);
+    if (v.length > 6) {
+        v = v.length === 11
+            ? `(${v.slice(0, 2)}) ${v.slice(2, 7)}-${v.slice(7)}`
+            : `(${v.slice(0, 2)}) ${v.slice(2, 6)}-${v.slice(6)}`;
+    } else if (v.length > 2) {
+        v = `(${v.slice(0, 2)}) ${v.slice(2)}`;
+    } else if (v.length > 0) {
+        v = `(${v}`;
+    }
+    input.value = v;
+}
+
+function abrirModalConfiguracoes(topicoInicial = 'equipe') {
+    if (!currentUser || (currentUser.cargo !== 'GERENTE' && currentUser.cargo !== 'COORDENADOR')) {
+        return alert("🔒 Acesso Negado: Apenas GERENTE e COORDENADOR podem aceder às Configurações.");
+    }
+    const menuUser = document.getElementById('userMenu');
+    if (menuUser) menuUser.classList.remove('show');
+
+    mudarTopicoConfiguracoes(topicoInicial);
+    carregarListaColaboradores();
+    carregarAlertasSistema(false);
+    document.getElementById('equipeModal').classList.add('show');
+}
+
+// Mantém compatibilidade com chamadas antigas
 function abrirModalEquipe() {
-    if(currentUser.cargo !== 'GERENTE' && currentUser.cargo !== 'COORDENADOR') return alert("🔒 Acesso Negado: Apenas o GERENTE e COORDENADOR podem gerir a equipe.");
-    fetch(`${API_BASE_URL}/usuarios`).then(r => r.json()).then(dados => {
-        document.getElementById('lista-usuarios').innerHTML = dados.map(u => `<div class="user-list-item"><div><b style="color:#1e293b;">${u.username}</b><br><span style="font-size:11px; color:#64748b; font-weight:bold;">${u.cargo} | HUB: ${u.hubs}</span></div><div class="user-list-item-actions"><button class="btn-edit" onclick="editarUsuario('${u.username}', '${u.cargo}', '${u.hubs}')">✏️ Editar</button><button class="btn-del" onclick="excluirUser('${u.username}')">🗑️ Excluir</button></div></div>`).join('');
-        document.getElementById('equipeModal').classList.add('show');
+    abrirModalConfiguracoes('equipe');
+}
+
+function fecharModalConfiguracoes() {
+    const modal = document.getElementById('equipeModal');
+    if (modal) modal.classList.remove('show');
+}
+
+function mudarTopicoConfiguracoes(topico) {
+    document.querySelectorAll('.config-topic-btn').forEach(b => b.classList.remove('ativo'));
+    document.querySelectorAll('.config-topic-panel').forEach(p => p.classList.remove('ativo'));
+
+    if (topico === 'alertas') {
+        document.getElementById('btn-topico-alertas')?.classList.add('ativo');
+        document.getElementById('config-painel-alertas')?.classList.add('ativo');
+        carregarAlertasSistema(false);
+    } else {
+        document.getElementById('btn-topico-equipe')?.classList.add('ativo');
+        document.getElementById('config-painel-equipe')?.classList.add('ativo');
+        voltarParaListaEquipe();
+    }
+}
+
+function carregarListaColaboradores() {
+    fetch(`${API_BASE_URL}/usuarios`)
+        .then(r => r.json())
+        .then(dados => {
+            cacheColaboradoresEquipe = Array.isArray(dados) ? dados : [];
+            filtrarListaColaboradores();
+        })
+        .catch(() => {});
+}
+
+function filtrarListaColaboradores() {
+    const termo = (document.getElementById('input-pesquisa-equipe')?.value || '').toLowerCase().trim();
+    const cont = document.getElementById('lista-usuarios');
+    const badge = document.getElementById('badge-total-colaboradores');
+    if (!cont) return;
+
+    const filtrados = cacheColaboradoresEquipe.filter(u => {
+        if (!termo) return true;
+        return (
+            String(u.username || '').toLowerCase().includes(termo) ||
+            String(u.cargo || '').toLowerCase().includes(termo) ||
+            String(u.hubs || '').toLowerCase().includes(termo) ||
+            String(u.telefone || '').toLowerCase().includes(termo)
+        );
+    });
+
+    if (badge) {
+        badge.innerText = `${filtrados.length} colaborador${filtrados.length !== 1 ? 'es' : ''}`;
+    }
+
+    if (filtrados.length === 0) {
+        cont.innerHTML = `<div style="padding: 32px; text-align: center; color: #94a3b8; font-size: 13px;">Nenhum colaborador encontrado para esta pesquisa.</div>`;
+        return;
+    }
+
+    cont.innerHTML = filtrados.map(u => {
+        const letra = String(u.username || 'U').trim().charAt(0).toUpperCase();
+        const telStr = u.telefone ? `📞 ${u.telefone}` : `<span style="color:#94a3b8;">Sem telefone</span>`;
+        const uEsc = String(u.username || '').replace(/'/g, "\\'");
+
+        return `
+            <div class="user-list-item" style="padding: 12px 16px;">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <div style="width: 38px; height: 38px; border-radius: 50%; background: #e0e7ff; color: #1e40af; font-weight: 800; font-size: 15px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                        ${letra}
+                    </div>
+                    <div>
+                        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                            <b style="color: #0f172a; font-size: 14px;">${u.username}</b>
+                            <span style="background: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; padding: 1px 7px; border-radius: 10px; font-size: 10.5px; font-weight: 800;">
+                                ${u.cargo}
+                            </span>
+                        </div>
+                        <div style="font-size: 11.5px; color: #64748b; margin-top: 3px; font-weight: 600;">
+                            📍 HUB: <b style="color: #1a237e;">${u.hubs || 'TODOS'}</b> &nbsp;|&nbsp; ${telStr}
+                        </div>
+                    </div>
+                </div>
+                <div class="user-list-item-actions">
+                    <button class="btn-edit" onclick="abrirFichaColaborador('${uEsc}')">✏️ Editar</button>
+                    <button class="btn-del" onclick="excluirUser('${uEsc}')">🗑️ Excluir</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function atualizarAvatarFicha(nome) {
+    const av = document.getElementById('ficha-avatar-letra');
+    if (!av) return;
+    const limpo = String(nome || '').trim();
+    av.innerText = limpo ? limpo.charAt(0).toUpperCase() : '👤';
+}
+
+function abrirFichaColaborador(usernameAlvo) {
+    const visaoLista = document.getElementById('equipe-visao-lista');
+    const visaoFicha = document.getElementById('equipe-visao-ficha');
+    if (visaoLista) visaoLista.style.display = 'none';
+    if (visaoFicha) visaoFicha.style.display = 'block';
+
+    const inpOriginal = document.getElementById('eq-original-user');
+    const inpUser = document.getElementById('eq-user');
+    const inpTel = document.getElementById('eq-telefone');
+    const inpPwd = document.getElementById('eq-pwd');
+    const selCargo = document.getElementById('eq-cargo');
+    const inpHubs = document.getElementById('eq-hubs');
+    const badgeModo = document.getElementById('badge-modo-ficha');
+
+    // Libera a edição do campo de utilizador sempre!
+    inpUser.removeAttribute('readonly');
+    inpUser.style.backgroundColor = "#f8fafc";
+
+    if (usernameAlvo) {
+        const colab = cacheColaboradoresEquipe.find(x => x.username === usernameAlvo) || {
+            username: usernameAlvo,
+            cargo: 'ANALISTA',
+            hubs: 'TODOS',
+            telefone: ''
+        };
+        inpOriginal.value = colab.username;
+        inpUser.value = colab.username;
+        inpTel.value = colab.telefone || '';
+        inpPwd.value = '';
+        inpPwd.placeholder = "Nova senha (Vazio = Manter senha atual)";
+        selCargo.value = colab.cargo || 'ANALISTA';
+        inpHubs.value = colab.hubs || 'TODOS';
+
+        document.getElementById('titulo-form-equipe').innerText = `✏️ Editando: ${colab.username}`;
+        if (badgeModo) {
+            badgeModo.innerText = "EDITANDO COLABORADOR";
+            badgeModo.style.background = "#fef3c7";
+            badgeModo.style.color = "#b45309";
+        }
+        atualizarAvatarFicha(colab.username);
+    } else {
+        inpOriginal.value = '';
+        inpUser.value = '';
+        inpTel.value = '';
+        inpPwd.value = '';
+        inpPwd.placeholder = "Defina a palavra-passe de acesso";
+        selCargo.value = 'ANALISTA';
+        inpHubs.value = 'TODOS';
+
+        document.getElementById('titulo-form-equipe').innerText = "➕ Novo Colaborador";
+        if (badgeModo) {
+            badgeModo.innerText = "NOVO CADASTRO";
+            badgeModo.style.background = "#dcfce7";
+            badgeModo.style.color = "#15803d";
+        }
+        atualizarAvatarFicha('');
+    }
+}
+
+function voltarParaListaEquipe() {
+    const visaoLista = document.getElementById('equipe-visao-lista');
+    const visaoFicha = document.getElementById('equipe-visao-ficha');
+    if (visaoFicha) visaoFicha.style.display = 'none';
+    if (visaoLista) visaoLista.style.display = 'block';
+}
+
+function salvarUsuario() {
+    const uOriginal = document.getElementById('eq-original-user')?.value.trim() || "";
+    const u = document.getElementById('eq-user').value.trim();
+    const tel = document.getElementById('eq-telefone')?.value.trim() || "";
+    const p = document.getElementById('eq-pwd').value;
+    const c = document.getElementById('eq-cargo').value;
+    const h = document.getElementById('eq-hubs').value.trim().toUpperCase() || "TODOS";
+
+    if (!u) return alert("Preencha o nome de utilizador (login)!");
+    if (currentUser.cargo === 'COORDENADOR' && (c === 'GERENTE' || c === 'COORDENADOR')) {
+        return alert("🔒 Acesso Negado: Coordenadores não podem conceder nível de Gerente ou Coordenador.");
+    }
+
+    fetch(`${API_BASE_URL}/add_usuario`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            original_username: uOriginal,
+            username: u,
+            password: p,
+            cargo: c,
+            hubs: h,
+            telefone: tel
+        })
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (!res.sucesso) {
+            return alert("❌ Erro: " + (res.erro || "Não foi possível salvar."));
+        }
+        // Se o próprio usuário logado alterou o seu username ou HUB, atualiza a sessão atual
+        if (uOriginal && currentUser && currentUser.username === uOriginal) {
+            currentUser.username = u;
+            currentUser.cargo = c;
+            currentUser.hubs = h;
+            currentUser.telefone = tel;
+            sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
+            document.getElementById('nome-usuario-logado').innerHTML = `👤 ${currentUser.username.toUpperCase()}`;
+            document.getElementById('menu-nome').innerText = currentUser.username.toUpperCase();
+        }
+        mostrarToastRobo(`✅ Colaborador '${u}' salvo com sucesso!`);
+        carregarListaColaboradores();
+        voltarParaListaEquipe();
     });
 }
-function editarUsuario(u, c, h) {
-    document.getElementById('titulo-form-equipe').innerText = "✏️ Editar Utilizador"; document.getElementById('eq-user').value = u;
-    document.getElementById('eq-user').setAttribute('readonly', true); document.getElementById('eq-user').style.backgroundColor = "#e2e8f0";
-    document.getElementById('eq-pwd').value = ""; document.getElementById('eq-cargo').value = c; document.getElementById('eq-hubs').value = h;
+
+function excluirUser(u) {
+    if (confirm(`Deseja realmente excluir o colaborador '${u}'?`)) {
+        fetch(`${API_BASE_URL}/delete_usuario/${encodeURIComponent(u)}`, { method: 'DELETE' })
+            .then(() => carregarListaColaboradores());
+    }
 }
-function limparFormularioUsuario() {
-    document.getElementById('titulo-form-equipe').innerText = "➕ Novo Utilizador"; document.getElementById('eq-user').value = "";
-    document.getElementById('eq-user').removeAttribute('readonly'); document.getElementById('eq-user').style.backgroundColor = "#f8fafc";
-    document.getElementById('eq-pwd').value = ""; document.getElementById('eq-cargo').value = "ANALISTA"; document.getElementById('eq-hubs').value = "";
+
+// ==========================================
+// FUNÇÕES DO TÓPICO: GERENCIAR ALERTAS
+// ==========================================
+function renderizarListaAlertasConfig() {
+    const cont = document.getElementById('lista-alertas-sistema');
+    if (!cont) return;
+
+    if (!Array.isArray(listaAlertasSistema) || listaAlertasSistema.length === 0) {
+        cont.innerHTML = `<div style="padding: 18px; text-align: center; color: #94a3b8; background: #fff; border-radius: 8px; border: 1px dashed #cbd5e1; font-size: 12px;">Nenhum alerta personalizado cadastrado no momento.</div>`;
+        return;
+    }
+
+    cont.innerHTML = listaAlertasSistema.map(a => {
+        const isAtivo = String(a.ativo || 'SIM').toUpperCase() === 'SIM';
+        const prio = String(a.prioridade || 'INFO').toUpperCase();
+        const corBorda = prio === 'URGENTE' ? '#ef4444' : (prio === 'WARN' ? '#f59e0b' : '#0284c7');
+        const badgeAoAbrir = String(a.exibir_ao_abrir || 'SIM').toUpperCase() === 'SIM'
+            ? `<span style="background:#e0e7ff; color:#1d4ed8; padding:2px 6px; border-radius:6px; font-size:10px; font-weight:800;">🚀 Abre no Login</span>`
+            : `<span style="background:#f1f5f9; color:#64748b; padding:2px 6px; border-radius:6px; font-size:10px; font-weight:700;">📥 Apenas na Caixa (✉️)</span>`;
+
+        return `
+            <div style="background: #ffffff; border: 1px solid #e2e8f0; border-left: 4px solid ${corBorda}; border-radius: 8px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; gap: 10px; opacity: ${isAtivo ? '1' : '0.6'};">
+                <div style="flex: 1; min-width: 0;">
+                    <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                        <b style="color: #0f172a; font-size: 13px;">${a.titulo}</b>
+                        <span style="background:#f8fafc; border:1px solid #cbd5e1; color:#334155; padding:1px 6px; border-radius:6px; font-size:10px; font-weight:800;">HUB: ${a.hub_alvo || 'TODOS'}</span>
+                        ${badgeAoAbrir}
+                    </div>
+                    <div style="font-size: 12px; color: #475569; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        ${a.mensagem}
+                    </div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+                    <button onclick="alternarStatusAlertaSistema(${a.id}, '${isAtivo ? 'NÃO' : 'SIM'}')" style="background: ${isAtivo ? '#dcfce7' : '#f1f5f9'}; color: ${isAtivo ? '#15803d' : '#64748b'}; border: 1px solid ${isAtivo ? '#86efac' : '#cbd5e1'}; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 800; cursor: pointer;">
+                        ${isAtivo ? '🟢 Ativo' : '⚪ Pausado'}
+                    </button>
+                    <button class="btn-edit" onclick="editarAlertaSistema(${a.id})">✏️</button>
+                    <button class="btn-del" onclick="excluirAlertaSistema(${a.id})">🗑️</button>
+                </div>
+            </div>
+        `;
+    }).join('');
 }
-function salvarUsuario() {
-    const u = document.getElementById('eq-user').value, p = document.getElementById('eq-pwd').value, c = document.getElementById('eq-cargo').value, h = document.getElementById('eq-hubs').value;
-    if(!u) return alert("Preencha o nome de utilizador!");
-    if(currentUser.cargo === 'COORDENADOR' && (c === 'GERENTE' || c === 'COORDENADOR')) return alert("🔒 Acesso Negado: Coordenadores não podem conceder este nível.");
-    fetch(`${API_BASE_URL}/add_usuario`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({username: u, password: p, cargo: c, hubs: h}) }).then(() => { limparFormularioUsuario(); abrirModalEquipe(); });
+
+function limparFormularioAlerta() {
+    document.getElementById('alerta-edit-id').value = '';
+    document.getElementById('alerta-titulo').value = '';
+    document.getElementById('alerta-mensagem').value = '';
+    document.getElementById('alerta-prioridade').value = 'INFO';
+    document.getElementById('alerta-hub').value = 'TODOS';
+    document.getElementById('alerta-exibir-abrir').checked = true;
+    document.getElementById('titulo-form-alerta').innerText = '📢 Criar / Disparar Novo Alerta';
+    const btnCancel = document.getElementById('btn-cancelar-edicao-alerta');
+    if (btnCancel) btnCancel.style.display = 'none';
 }
-function excluirUser(u) { if(confirm(`Excluir ${u}?`)) fetch(`${API_BASE_URL}/delete_usuario/${u}`, { method: 'DELETE' }).then(() => abrirModalEquipe()); }
+
+function editarAlertaSistema(idAlerta) {
+    const a = listaAlertasSistema.find(x => Number(x.id) === Number(idAlerta));
+    if (!a) return;
+    document.getElementById('alerta-edit-id').value = a.id;
+    document.getElementById('alerta-titulo').value = a.titulo || '';
+    document.getElementById('alerta-mensagem').value = a.mensagem || '';
+    document.getElementById('alerta-prioridade').value = a.prioridade || 'INFO';
+    document.getElementById('alerta-hub').value = a.hub_alvo || 'TODOS';
+    document.getElementById('alerta-exibir-abrir').checked = String(a.exibir_ao_abrir || 'SIM').toUpperCase() === 'SIM';
+    document.getElementById('titulo-form-alerta').innerText = `✏️ Editando Alerta #${a.id}`;
+    const btnCancel = document.getElementById('btn-cancelar-edicao-alerta');
+    if (btnCancel) btnCancel.style.display = 'inline-flex';
+}
+
+function salvarAlertaSistema() {
+    const id = document.getElementById('alerta-edit-id').value;
+    const titulo = document.getElementById('alerta-titulo').value.trim();
+    const mensagem = document.getElementById('alerta-mensagem').value.trim();
+    const prioridade = document.getElementById('alerta-prioridade').value;
+    const hub = document.getElementById('alerta-hub').value.trim().toUpperCase() || 'TODOS';
+    const exibirAoAbrir = document.getElementById('alerta-exibir-abrir').checked ? 'SIM' : 'NÃO';
+
+    if (!titulo || !mensagem) {
+        return alert("Preencha o título e a mensagem do alerta!");
+    }
+
+    fetch(`${API_BASE_URL}/salvar_alerta_sistema`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            id: id ? Number(id) : null,
+            titulo: titulo,
+            mensagem: mensagem,
+            prioridade: prioridade,
+            hub_alvo: hub,
+            exibir_ao_abrir: exibirAoAbrir,
+            ativo: 'SIM',
+            criado_por: currentUser ? currentUser.username.toUpperCase() : 'GESTÃO'
+        })
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (res.sucesso) {
+            limparFormularioAlerta();
+            carregarAlertasSistema(false);
+            mostrarToastRobo("🔔 Alerta publicado com sucesso!");
+        } else {
+            alert("Erro ao salvar alerta: " + (res.erro || ""));
+        }
+    });
+}
+
+function alternarStatusAlertaSistema(idAlerta, novoStatus) {
+    fetch(`${API_BASE_URL}/toggle_alerta_sistema`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: idAlerta, ativo: novoStatus })
+    }).then(() => carregarAlertasSistema(false));
+}
+
+function excluirAlertaSistema(idAlerta) {
+    if (confirm("Deseja realmente excluir este alerta do sistema?")) {
+        fetch(`${API_BASE_URL}/deletar_alerta_sistema/${idAlerta}`, { method: 'DELETE' })
+            .then(() => carregarAlertasSistema(false));
+    }
+}
 
 function carregarMetas() {
     fetch(`${API_BASE_URL}/metas`).then(r => r.json()).then(d => {
@@ -1704,13 +2129,18 @@ function iniciarSistemaAposLogin() {
     carregarMetas();
     carregarEdicoesOcorrencias();
     carregarEdicoesRotasAvulsas();
+    carregarAlertasSistema(true); // Verifica e dispara alertas ativos ao abrir o sistema!
     carregarRotas(false);
 
     setTimeout(() => {
         carregarRelatorios(false);
     }, 1500);
     
-    setInterval(carregarTickets, 5000);
+    setInterval(() => {
+        carregarTickets();
+        carregarAlertasSistema(false);
+    }, 5000);
+    
     setInterval(() => {
         atualizarCountdowns();
         if (roboOnlineAtual && statusSessaoOktaAtual === 'LOGADO') {

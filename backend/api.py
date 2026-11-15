@@ -124,15 +124,53 @@ def ao_iniciar_api():
 
 
 # ==========================================
-# GESTÃO DE USUÁRIOS E LOGIN
+# GESTÃO DE USUÁRIOS, LOGIN E ALERTAS DO SISTEMA
 # ==========================================
+def garantir_tabela_usuarios():
+  with motor_db.begin() as conn:
+    conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS usuarios (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(50) UNIQUE NOT NULL,
+                password VARCHAR(50) NOT NULL,
+                cargo VARCHAR(50) NOT NULL,
+                hubs_atribuidos VARCHAR(255),
+                telefone VARCHAR(50) DEFAULT ''
+            )
+        """))
+    conn.execute(
+        text(
+            "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS telefone VARCHAR(50)"
+            " DEFAULT ''"
+        )
+    )
+
+
+def garantir_tabela_alertas():
+  with motor_db.begin() as conn:
+    conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS alertas_sistema (
+                id SERIAL PRIMARY KEY,
+                titulo VARCHAR(150) NOT NULL,
+                mensagem TEXT NOT NULL,
+                prioridade VARCHAR(30) DEFAULT 'INFO',
+                hub_alvo VARCHAR(100) DEFAULT 'TODOS',
+                exibir_ao_abrir VARCHAR(10) DEFAULT 'SIM',
+                ativo VARCHAR(10) DEFAULT 'SIM',
+                criado_por VARCHAR(50) DEFAULT '',
+                data_criacao VARCHAR(50) DEFAULT ''
+            )
+        """))
+
+
 @app.post("/login")
 async def fazer_login(request: Request):
   dados = await request.json()
   try:
+    garantir_tabela_usuarios()
     query = text(
-        "SELECT username, cargo, hubs_atribuidos FROM usuarios WHERE username ="
-        " :u AND password = :p"
+        "SELECT username, cargo, hubs_atribuidos, COALESCE(telefone, '') FROM"
+        " usuarios WHERE username = :u AND password = :p"
     )
     with motor_db.connect() as conn:
       resultado = conn.execute(
@@ -146,6 +184,7 @@ async def fazer_login(request: Request):
                 "username": resultado[0],
                 "cargo": resultado[1],
                 "hubs": resultado[2],
+                "telefone": resultado[3] or "",
             },
         }
       return {"sucesso": False, "erro": "Usuário ou senha incorretos."}
@@ -156,12 +195,22 @@ async def fazer_login(request: Request):
 @app.get("/usuarios")
 def listar_usuarios():
   try:
+    garantir_tabela_usuarios()
     with motor_db.connect() as conn:
       result = conn.execute(
-          text("SELECT username, cargo, hubs_atribuidos FROM usuarios")
+          text(
+              "SELECT username, cargo, hubs_atribuidos, COALESCE(telefone, '')"
+              " FROM usuarios ORDER BY LOWER(username)"
+          )
       ).fetchall()
       return [
-          {"username": r[0], "cargo": r[1], "hubs": r[2]} for r in result
+          {
+              "username": r[0],
+              "cargo": r[1],
+              "hubs": r[2],
+              "telefone": r[3] or "",
+          }
+          for r in result
       ]
   except Exception:
     return []
@@ -170,42 +219,81 @@ def listar_usuarios():
 @app.post("/add_usuario")
 async def add_usuario(request: Request):
   dados = await request.json()
-  u = dados.get("username")
-  p = dados.get("password")
-  c = dados.get("cargo")
-  h = dados.get("hubs", "TODOS")
+  u = str(dados.get("username", "")).strip()
+  u_original = str(dados.get("original_username", "")).strip()
+  p = str(dados.get("password", "")).strip()
+  c = str(dados.get("cargo", "ANALISTA")).strip()
+  h = str(dados.get("hubs", "TODOS")).strip() or "TODOS"
+  tel = str(dados.get("telefone", "")).strip()
+
+  if not u:
+    return {"sucesso": False, "erro": "O nome de utilizador é obrigatório."}
 
   try:
+    garantir_tabela_usuarios()
     with motor_db.begin() as conn:
-      count = conn.execute(
-          text("SELECT count(*) FROM usuarios WHERE username=:u"), {"u": u}
-      ).scalar()
-      if count > 0:
+      # Caso esteja editando um colaborador existente (mesmo que tenha trocado o username)
+      if u_original:
+        if u.lower() != u_original.lower():
+          ja_existe = conn.execute(
+              text(
+                  "SELECT count(*) FROM usuarios WHERE LOWER(username) ="
+                  " LOWER(:u)"
+              ),
+              {"u": u},
+          ).scalar()
+          if ja_existe > 0:
+            return {
+                "sucesso": False,
+                "erro": f"O login '{u}' já está em uso por outro colaborador.",
+            }
+
         if p:
           conn.execute(
-              text(
-                  "UPDATE usuarios SET password=:p, cargo=:c,"
-                  " hubs_atribuidos=:h WHERE username=:u"
-              ),
-              {"u": u, "p": p, "c": c, "h": h},
+              text("""
+                            UPDATE usuarios
+                            SET username = :u, password = :p, cargo = :c, hubs_atribuidos = :h, telefone = :t
+                            WHERE username = :uo
+                        """),
+              {"u": u, "p": p, "c": c, "h": h, "t": tel, "uo": u_original},
           )
         else:
           conn.execute(
-              text(
-                  "UPDATE usuarios SET cargo=:c, hubs_atribuidos=:h WHERE"
-                  " username=:u"
-              ),
-              {"u": u, "c": c, "h": h},
+              text("""
+                            UPDATE usuarios
+                            SET username = :u, cargo = :c, hubs_atribuidos = :h, telefone = :t
+                            WHERE username = :uo
+                        """),
+              {"u": u, "c": c, "h": h, "t": tel, "uo": u_original},
           )
       else:
-        conn.execute(
+        # Novo colaborador
+        count = conn.execute(
             text(
-                "INSERT INTO usuarios (username, password, cargo,"
-                " hubs_atribuidos) VALUES (:u, :p, :c, :h)"
+                "SELECT count(*) FROM usuarios WHERE LOWER(username) ="
+                " LOWER(:u)"
             ),
-            {"u": u, "p": p, "c": c, "h": h},
+            {"u": u},
+        ).scalar()
+        if count > 0:
+          return {
+              "sucesso": False,
+              "erro": f"O utilizador '{u}' já existe. Use a opção Editar.",
+          }
+        if not p:
+          return {
+              "sucesso": False,
+              "erro": "Defina uma palavra-passe para o novo colaborador.",
+          }
+
+        conn.execute(
+            text("""
+                        INSERT INTO usuarios (username, password, cargo, hubs_atribuidos, telefone)
+                        VALUES (:u, :p, :c, :h, :t)
+                    """),
+            {"u": u, "p": p, "c": c, "h": h, "t": tel},
         )
-    return {"sucesso": True}
+    return {"sucesso": True, "username": u}
   except Exception as e:
     return {"sucesso": False, "erro": str(e)}
 
@@ -216,6 +304,139 @@ def del_usuario(username: str):
     with motor_db.begin() as conn:
       conn.execute(
           text("DELETE FROM usuarios WHERE username=:u"), {"u": username}
+      )
+    return {"sucesso": True}
+  except Exception as e:
+    return {"sucesso": False, "erro": str(e)}
+
+
+# ==========================================
+# GESTÃO DE ALERTAS DO SISTEMA
+# ==========================================
+@app.get("/alertas_sistema")
+def listar_alertas_sistema():
+  try:
+    garantir_tabela_alertas()
+    with motor_db.connect() as conn:
+      rows = conn.execute(text("""
+                SELECT id, titulo, mensagem, prioridade, hub_alvo, exibir_ao_abrir, ativo, criado_por, data_criacao
+                FROM alertas_sistema
+                ORDER BY id DESC
+            """)).fetchall()
+      return [
+          {
+              "id": r[0],
+              "titulo": r[1] or "",
+              "mensagem": r[2] or "",
+              "prioridade": r[3] or "INFO",
+              "hub_alvo": r[4] or "TODOS",
+              "exibir_ao_abrir": r[5] or "SIM",
+              "ativo": r[6] or "SIM",
+              "criado_por": r[7] or "",
+              "data_criacao": r[8] or "",
+          }
+          for r in rows
+      ]
+  except Exception:
+    return []
+
+
+@app.post("/salvar_alerta_sistema")
+async def salvar_alerta_sistema(request: Request):
+  dados = await request.json()
+  alerta_id = dados.get("id")
+  titulo = str(dados.get("titulo", "")).strip()
+  mensagem = str(dados.get("mensagem", "")).strip()
+  prioridade = str(dados.get("prioridade", "INFO")).upper().strip()
+  hub_alvo = str(dados.get("hub_alvo", "TODOS")).upper().strip() or "TODOS"
+  exibir_ao_abrir = (
+      "SIM"
+      if str(dados.get("exibir_ao_abrir", "SIM")).upper().strip() == "SIM"
+      else "NÃO"
+  )
+  ativo = (
+      "SIM"
+      if str(dados.get("ativo", "SIM")).upper().strip() == "SIM"
+      else "NÃO"
+  )
+  criado_por = str(dados.get("criado_por", "Sistema")).strip()
+  agora_str = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
+
+  if not titulo or not mensagem:
+    return {"sucesso": False, "erro": "Preencha o título e a mensagem do alerta."}
+
+  try:
+    garantir_tabela_alertas()
+    with motor_db.begin() as conn:
+      if alerta_id:
+        conn.execute(
+            text("""
+                    UPDATE alertas_sistema
+                    SET titulo = :t, mensagem = :m, prioridade = :p, hub_alvo = :h,
+                        exibir_ao_abrir = :ea, ativo = :at
+                    WHERE id = :id
+                """),
+            {
+                "t": titulo,
+                "m": mensagem,
+                "p": prioridade,
+                "h": hub_alvo,
+                "ea": exibir_ao_abrir,
+                "at": ativo,
+                "id": int(alerta_id),
+            },
+        )
+      else:
+        conn.execute(
+            text("""
+                    INSERT INTO alertas_sistema (titulo, mensagem, prioridade, hub_alvo, exibir_ao_abrir, ativo, criado_por, data_criacao)
+                    VALUES (:t, :m, :p, :h, :ea, :at, :cp, :dc)
+                """),
+            {
+                "t": titulo,
+                "m": mensagem,
+                "p": prioridade,
+                "h": hub_alvo,
+                "ea": exibir_ao_abrir,
+                "at": ativo,
+                "cp": criado_por,
+                "dc": agora_str,
+            },
+        )
+    return {"sucesso": True}
+  except Exception as e:
+    return {"sucesso": False, "erro": str(e)}
+
+
+@app.post("/toggle_alerta_sistema")
+async def toggle_alerta_sistema(request: Request):
+  dados = await request.json()
+  alerta_id = dados.get("id")
+  novo_ativo = (
+      "SIM"
+      if str(dados.get("ativo", "NÃO")).upper().strip() == "SIM"
+      else "NÃO"
+  )
+  try:
+    garantir_tabela_alertas()
+    with motor_db.begin() as conn:
+      conn.execute(
+          text("UPDATE alertas_sistema SET ativo = :at WHERE id = :id"),
+          {"at": novo_ativo, "id": int(alerta_id)},
+      )
+    return {"sucesso": True}
+  except Exception as e:
+    return {"sucesso": False, "erro": str(e)}
+
+
+@app.delete("/deletar_alerta_sistema/{alerta_id}")
+def deletar_alerta_sistema(alerta_id: int):
+  try:
+    garantir_tabela_alertas()
+    with motor_db.begin() as conn:
+      conn.execute(
+          text("DELETE FROM alertas_sistema WHERE id = :id"),
+          {"id": int(alerta_id)},
       )
     return {"sucesso": True}
   except Exception as e:

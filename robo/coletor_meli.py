@@ -359,7 +359,7 @@ def garantir_login(page, forcar_recarregamento=False):
     return True
 
   log_painel(
-      "🔐 Autenticação necessária. Iniciando fluxo inteligente de Login Okta..."
+      "🔐 Autenticação necessária. Iniciando fluxo de Login Okta..."
   )
   informar_status_login("AGUARDANDO_OKTA")
 
@@ -527,8 +527,7 @@ def garantir_login(page, forcar_recarregamento=False):
             informar_status_login("AGUARDANDO_OKTA")
             if not aviso_okta_enviado:
               log_painel(
-                  "📲 AGUARDANDO CÓDIGO OKTA: Digite os 6 dígitos na 'Área do"
-                  " Robô' e clique em Ativar!"
+                  "📲 AGUARDANDO CÓDIGO OKTA: Digite os 6 dígitos no canto superior esquerdo 'Autenticação OKTA' e clique em Ativar!"
               )
               aviso_okta_enviado = True
               inicio_espera_okta = time.time()
