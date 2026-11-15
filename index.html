@@ -1060,12 +1060,12 @@
                                 <div class="ficha-grid-form">
                                     <div>
                                         <label class="robo-label">🪪 NOME DO COLABORADOR</label>
-                                        <input type="text" id="eq-nome" class="login-input" placeholder="Ex: Gabriel Rodrigues" oninput="atualizarAvatarFicha(this.value || document.getElementById('eq-user').value)">
+                                        <input type="text" id="eq-nome" class="login-input" placeholder="Nome e sobrenome" oninput="atualizarAvatarFicha(this.value || document.getElementById('eq-user').value)">
                                     </div>
 
                                     <div>
                                         <label class="robo-label">👤 NOME DE UTILIZADOR (LOGIN)</label>
-                                        <input type="text" id="eq-user" class="login-input" placeholder="Ex: Gabriel.rodrigues" oninput="if(!document.getElementById('eq-nome').value) atualizarAvatarFicha(this.value)">
+                                        <input type="text" id="eq-user" class="login-input" placeholder="Ex: Nome e último nome" oninput="if(!document.getElementById('eq-nome').value) atualizarAvatarFicha(this.value)">
                                     </div>
 
                                     <div>
@@ -1116,7 +1116,7 @@
                         <div class="config-section-header">
                             <div>
                                 <h3>🔔 Gerenciador de Alertas do Sistema</h3>
-                                <p>Configure avisos que disparam automaticamente ao abrir o sistema e ficam disponíveis na Caixa de Mensagens (✉️).</p>
+                                <p>Configure avisos que ficam disponíveis na Caixa de Mensagens (✉️).</p>
                             </div>
                         </div>
 
@@ -1125,8 +1125,8 @@
                             <div style="display: flex; align-items: center; gap: 10px;">
                                 <span style="font-size: 20px;">🔐</span>
                                 <div>
-                                    <div style="font-weight: 800; font-size: 13px; color: #0f172a;">Alerta Automático de Sessão Okta Verify</div>
-                                    <div style="font-size: 11.5px; color: #475569;">Monitorado automaticamente pelo robô quando a sessão do Mercado Livre pede validação de 6 dígitos.</div>
+                                    <div style="font-weight: 800; font-size: 13px; color: #0f172a;">Alerta Automático de Sessão Okta </div>
+                                    <div style="font-size: 11.5px; color: #475569;">Monitorado automaticamente pelo robô quando a sessão do Mercado Livre se encerra e pede validação do OKTA.</div>
                                 </div>
                             </div>
                             <span style="background: #dcfce7; color: #15803d; border: 1px solid #86efac; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 800; white-space: nowrap;">
@@ -1147,7 +1147,7 @@
                             <div style="display: grid; grid-template-columns: 1.4fr 1fr 0.9fr 1.2fr; gap: 10px; margin-bottom: 10px;">
                                 <div>
                                     <label class="robo-label">TÍTULO DO ALERTA</label>
-                                    <input type="text" id="alerta-titulo" class="login-input" style="margin-bottom: 0; padding: 8px 10px;" placeholder="Ex: Atenção no fechamento">
+                                    <input type="text" id="alerta-titulo" class="login-input" style="margin-bottom: 0; padding: 8px 10px;" placeholder="Ex: Atenção Colaboradores!">
                                 </div>
                                 <div>
                                     <label class="robo-label">NÍVEL DE DESTAQUE</label>
