@@ -184,6 +184,19 @@
                         ⬇️ Baixar Planilha
                     </button>
 
+                    <!-- SELETOR DE COLUNAS VISÍVEIS (PERSONALIZADO POR PERFIL) -->
+                    <div class="colunas-dropdown-wrap" id="colunas-planilha-wrap" style="position: relative; display: inline-block;">
+                        <button type="button" class="btn-acao" onclick="toggleMenuColunasPlanilha(event)" style="background-color: #f1f5f9; color: #1e293b; border-color: #cbd5e1; font-weight: bold;">
+                            👁️ <span id="label-btn-colunas-planilha">Colunas</span> ▼
+                        </button>
+                        <div id="menu-colunas-planilha" style="display: none; position: absolute; top: 112%; left: 0; min-width: 240px; max-height: 360px; overflow-y: auto; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.18); z-index: 2600; padding: 10px;">
+                            <div style="display: flex; gap: 6px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #e2e8f0;">
+                                <button type="button" onclick="mostrarTodasColunasPlanilha()" style="flex: 1; padding: 5px 8px; font-size: 11px; font-weight: 800; border-radius: 4px; border: 1px solid #86efac; background: #f0fdf4; color: #15803d; cursor: pointer;">Mostrar Todas</button>
+                            </div>
+                            <div id="lista-checkboxes-colunas-planilha" style="display: flex; flex-direction: column; gap: 5px;"></div>
+                        </div>
+                    </div>
+
                     <div style="margin-left: 20px; display: flex; align-items: center; gap: 8px; border-left: 2px solid #eee; padding-left: 20px; flex-wrap: wrap;">
                         <label style="font-size: 13px; font-weight: bold; color: #1a237e;">📍 Filtrar por HUB:</label>
                         <select id="filtro-hub-planilha" onchange="aplicarFiltroHubPlanilha()" style="padding: 6px 10px; border-radius: 4px; border: 1px solid #ccc; font-weight: bold; color: #1a237e; outline: none; cursor: pointer; background: #f8fafc; min-width: 150px;">
@@ -1110,17 +1123,22 @@
 
                         <!-- FORMULÁRIO DE NOVO / EDITAR ALERTA -->
                         <div class="alerta-form-box">
-                            <h4 id="titulo-form-alerta" style="margin: 0 0 12px 0; color: #1a237e; font-size: 14px;">📢 Criar / Disparar Novo Alerta</h4>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+                                <h4 id="titulo-form-alerta" style="margin: 0; color: #1a237e; font-size: 14px;">📢 Criar / Disparar Novo Alerta</h4>
+                                <span style="background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 800;">
+                                    ⏱️ Duração automática: 12 horas
+                                </span>
+                            </div>
                             <input type="hidden" id="alerta-edit-id" value="">
 
-                            <div style="display: grid; grid-template-columns: 1.5fr 1fr 1fr; gap: 10px; margin-bottom: 10px;">
+                            <div style="display: grid; grid-template-columns: 1.4fr 1fr 0.9fr 1.2fr; gap: 10px; margin-bottom: 10px;">
                                 <div>
                                     <label class="robo-label">TÍTULO DO ALERTA</label>
-                                    <input type="text" id="alerta-titulo" class="login-input" style="margin-bottom: 0; padding: 9px 10px;" placeholder="Ex: Atenção no fechamento das rotas">
+                                    <input type="text" id="alerta-titulo" class="login-input" style="margin-bottom: 0; padding: 8px 10px;" placeholder="Ex: Atenção no fechamento">
                                 </div>
                                 <div>
                                     <label class="robo-label">NÍVEL DE DESTAQUE</label>
-                                    <select id="alerta-prioridade" class="login-input" style="margin-bottom: 0; padding: 9px 10px; cursor: pointer; font-weight: 700;">
+                                    <select id="alerta-prioridade" class="login-input" style="margin-bottom: 0; padding: 8px 10px; cursor: pointer; font-weight: 700;">
                                         <option value="INFO">ℹ️ Informativo (Azul)</option>
                                         <option value="WARN">⚠️ Atenção (Amarelo)</option>
                                         <option value="URGENTE">🚨 Urgente (Vermelho)</option>
@@ -1128,24 +1146,32 @@
                                 </div>
                                 <div>
                                     <label class="robo-label">HUB DESTINATÁRIO</label>
-                                    <input type="text" id="alerta-hub" class="login-input" style="margin-bottom: 0; padding: 9px 10px; text-transform: uppercase;" placeholder="TODOS ou ex: BRXSP10" value="TODOS" oninput="this.value = this.value.toUpperCase();">
+                                    <input type="text" id="alerta-hub" class="login-input" style="margin-bottom: 0; padding: 8px 10px; text-transform: uppercase;" placeholder="TODOS ou BRXSP10" value="TODOS" oninput="this.value = this.value.toUpperCase();">
+                                </div>
+                                <div style="position: relative;" id="alerta-cargos-dropdown-wrap">
+                                    <label class="robo-label">CARGOS DESTINATÁRIOS</label>
+                                    <button type="button" onclick="toggleMenuCargosAlerta(event)" style="width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid #ccc; background: #f8fafc; color: #1a237e; font-weight: 800; font-size: 12px; cursor: pointer; display: flex; justify-content: space-between; align-items: center;">
+                                        <span id="label-cargos-alerta" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Todos os Cargos</span>
+                                        <span style="font-size: 10px;">▼</span>
+                                    </button>
+                                    <div id="menu-cargos-alerta" style="display: none; position: absolute; top: 105%; right: 0; width: 220px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.18); z-index: 3000; padding: 6px 0;"></div>
                                 </div>
                             </div>
 
                             <div style="margin-bottom: 10px;">
                                 <label class="robo-label">MENSAGEM DO ALERTA</label>
-                                <textarea id="alerta-mensagem" rows="2" class="login-input" style="margin-bottom: 0; padding: 9px 10px; resize: vertical; font-family: inherit;" placeholder="Digite o comunicado que aparecerá na tela dos colaboradores ao abrirem o sistema..."></textarea>
+                                <textarea id="alerta-mensagem" rows="2" class="login-input" style="margin-bottom: 0; padding: 8px 10px; resize: vertical; font-family: inherit;" placeholder="Digite o comunicado que aparecerá na tela dos colaboradores ao abrirem o sistema..."></textarea>
                             </div>
 
                             <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
-                                <label style="display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 700; color: #1e293b; cursor: pointer;">
+                                <label style="display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: #1e293b; cursor: pointer;">
                                     <input type="checkbox" id="alerta-exibir-abrir" checked style="width: 16px; height: 16px; accent-color: #1a237e; cursor: pointer;">
-                                    🚀 Disparar pop-up automaticamente ao abrir o sistema
+                                    🚀 Disparar pop-up na 1ª vez que entrar no dia (depois fica salvo na Caixa ✉️ por 12h)
                                 </label>
 
                                 <div style="display: flex; gap: 8px;">
                                     <button id="btn-cancelar-edicao-alerta" class="btn-footer-cancel" style="display: none; padding: 8px 14px;" onclick="limparFormularioAlerta()">Cancelar</button>
-                                    <button class="btn-salvar-robo" style="width: auto; padding: 8px 18px;" onclick="salvarAlertaSistema()">🔔 Salvar e Publicar Alerta</button>
+                                    <button class="btn-salvar-robo" style="width: auto; padding: 8px 18px;" onclick="salvarAlertaSistema()">🔔 Salvar e Publicar (12h)</button>
                                 </div>
                             </div>
                         </div>

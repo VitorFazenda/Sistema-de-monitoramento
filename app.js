@@ -148,18 +148,81 @@ function tocarAlarmeSonoroOkta() {
     } catch (e) {}
 }
 
+function gerarTokenUnicoAlerta(a) {
+    return `${a.id}_${a.data_criacao || ''}`;
+}
+
+function obterListaStorageUsuario(prefixoChave) {
+    const userKey = currentUser ? currentUser.username.toLowerCase() : 'anon';
+    try {
+        const salvo = localStorage.getItem(`${prefixoChave}_${userKey}`);
+        const arr = salvo ? JSON.parse(salvo) : [];
+        return Array.isArray(arr) ? arr : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function salvarListaStorageUsuario(prefixoChave, lista) {
+    const userKey = currentUser ? currentUser.username.toLowerCase() : 'anon';
+    try {
+        localStorage.setItem(`${prefixoChave}_${userKey}`, JSON.stringify(lista.slice(-100)));
+    } catch (e) {}
+}
+
+function formatarTempoRestante12h(segundos) {
+    const seg = Math.max(0, parseInt(segundos || 0, 10));
+    const h = Math.floor(seg / 3600);
+    const m = Math.floor((seg % 3600) / 60);
+    if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;
+    return `${m}m`;
+}
+
 function obterAlertasAtivosParaUsuario() {
     if (!Array.isArray(listaAlertasSistema)) return [];
     const meusHubs = (currentUser && currentUser.hubs && currentUser.hubs !== "TODOS")
         ? currentUser.hubs.toUpperCase().split(',').map(h => h.trim()).filter(Boolean)
         : null;
+    const meuCargo = (currentUser && currentUser.cargo)
+        ? String(currentUser.cargo).toUpperCase().trim()
+        : "";
 
     return listaAlertasSistema.filter(a => {
         if (String(a.ativo || 'SIM').toUpperCase() !== 'SIM') return false;
+        if (typeof a.restante_seg === 'number' && a.expira_ts > 0 && a.restante_seg <= 0) return false;
+
+        // 1. Verifica permissão por HUB
         const hubAlvo = String(a.hub_alvo || 'TODOS').toUpperCase().trim();
-        if (!meusHubs || hubAlvo === 'TODOS') return true;
-        return meusHubs.some(mh => hubAlvo.includes(mh));
+        if (meusHubs && hubAlvo !== 'TODOS') {
+            const hubsAlerta = hubAlvo.split(',').map(x => x.trim()).filter(Boolean);
+            const bateuHub = meusHubs.some(mh => hubsAlerta.includes(mh) || hubAlvo.includes(mh));
+            if (!bateuHub) return false;
+        }
+
+        // 2. Verifica permissão por CARGO (suporta múltiplos cargos)
+        const cargosAlvo = String(a.cargos_alvo || 'TODOS').toUpperCase().trim();
+        if (meuCargo && cargosAlvo !== 'TODOS') {
+            const listaCargos = cargosAlvo.split(',').map(c => c.trim()).filter(Boolean);
+            if (!listaCargos.includes(meuCargo)) return false;
+        }
+
+        return true;
     });
+}
+
+function obterAlertasNaoLidosUsuario() {
+    const ativos = obterAlertasAtivosParaUsuario();
+    const lidos = new Set(obterListaStorageUsuario('alertas_lidos_caixa'));
+    return ativos.filter(a => !lidos.has(gerarTokenUnicoAlerta(a)));
+}
+
+function marcarAlertasAtuaisComoLidos() {
+    const ativos = obterAlertasAtivosParaUsuario();
+    if (ativos.length === 0) return;
+    const lidosSet = new Set(obterListaStorageUsuario('alertas_lidos_caixa'));
+    ativos.forEach(a => lidosSet.add(gerarTokenUnicoAlerta(a)));
+    salvarListaStorageUsuario('alertas_lidos_caixa', Array.from(lidosSet));
+    atualizarBadgeCaixaMensagens();
 }
 
 function atualizarBadgeCaixaMensagens() {
@@ -167,12 +230,13 @@ function atualizarBadgeCaixaMensagens() {
     const bolinha = document.getElementById('bolinha-alerta-okta');
     if (!btnInbox || !bolinha) return;
 
-    const alertasUsuario = obterAlertasAtivosParaUsuario();
-    const totalAlertas = (alertaOktaAtivo ? 1 : 0) + alertasUsuario.length;
+    const naoLidos = obterAlertasNaoLidosUsuario();
+    const totalNaoLidos = (alertaOktaAtivo ? 1 : 0) + naoLidos.length;
 
-    if (totalAlertas > 0) {
+    // Só fica vermelho em volta e com número se houver alerta NÃO LIDO (ou Okta pendente)
+    if (totalNaoLidos > 0) {
         bolinha.style.display = 'flex';
-        bolinha.innerText = String(totalAlertas);
+        bolinha.innerText = String(totalNaoLidos);
         btnInbox.classList.add('alerta-ativo');
     } else {
         bolinha.style.display = 'none';
@@ -202,16 +266,17 @@ function carregarAlertasSistema(verificarDisparoAoAbrir = false) {
             atualizarBadgeCaixaMensagens();
             renderizarListaAlertasConfig();
 
-            if (verificarDisparoAoAbrir) {
-                const alertasAoAbrir = obterAlertasAtivosParaUsuario().filter(
-                    a => String(a.exibir_ao_abrir || 'SIM').toUpperCase() === 'SIM'
+            if (verificarDisparoAoAbrir && currentUser) {
+                const jaExibidosNoPopup = new Set(obterListaStorageUsuario('alertas_popup_exibido'));
+                const novosParaDisparar = obterAlertasAtivosParaUsuario().filter(a =>
+                    String(a.exibir_ao_abrir || 'SIM').toUpperCase() === 'SIM' &&
+                    !jaExibidosNoPopup.has(gerarTokenUnicoAlerta(a))
                 );
-                if (alertasAoAbrir.length > 0) {
-                    const chaveSessao = `alertas_vistos_${currentUser ? currentUser.username : 'anon'}_${alertasAoAbrir.map(x => x.id).join('_')}`;
-                    if (!sessionStorage.getItem(chaveSessao)) {
-                        sessionStorage.setItem(chaveSessao, '1');
-                        abrirModalMensagens();
-                    }
+
+                if (novosParaDisparar.length > 0) {
+                    novosParaDisparar.forEach(a => jaExibidosNoPopup.add(gerarTokenUnicoAlerta(a)));
+                    salvarListaStorageUsuario('alertas_popup_exibido', Array.from(jaExibidosNoPopup));
+                    abrirModalMensagens();
                 }
             }
         })
@@ -225,6 +290,11 @@ function abrirModalMensagens() {
     if (!modal || !corpo) return;
 
     const alertasUsuario = obterAlertasAtivosParaUsuario();
+    const lidosAntesDeAbrir = new Set(obterListaStorageUsuario('alertas_lidos_caixa'));
+
+    // Ao abrir a caixa e visualizar, já marca os alertas como lidos e tira a cor vermelha em volta!
+    marcarAlertasAtuaisComoLidos();
+
     let htmlBlocos = '';
 
     if (alertaOktaAtivo) {
@@ -257,17 +327,27 @@ function abrirModalMensagens() {
                 ? { bg: '#fffbeb', border: '#f59e0b', titleColor: '#92400e', icon: '⚠️', tag: 'ATENÇÃO' }
                 : { bg: '#f0f9ff', border: '#0284c7', titleColor: '#075985', icon: '📢', tag: 'COMUNICADO' };
 
+            const eraNovo = !lidosAntesDeAbrir.has(gerarTokenUnicoAlerta(a));
+            const badgeNovo = eraNovo
+                ? `<span style="background:#ef4444; color:#fff; padding:1px 6px; border-radius:6px; font-size:9.5px; font-weight:800; margin-left:6px;">NOVO</span>`
+                : `<span style="background:#e2e8f0; color:#475569; padding:1px 6px; border-radius:6px; font-size:9.5px; font-weight:700; margin-left:6px;">✓ Lido</span>`;
+
+            const tempoStr = a.restante_seg > 0 ? `⏱️ Expira em ${formatarTempoRestante12h(a.restante_seg)}` : '';
+
             return `
                 <div style="background: ${cfg.bg}; border: 1px solid ${cfg.border}; border-left: 5px solid ${cfg.border}; border-radius: 8px; padding: 14px; margin-bottom: 10px; text-align: left;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px;">
-                        <span style="font-weight: 800; font-size: 14px; color: ${cfg.titleColor};">${cfg.icon} ${a.titulo}</span>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px; flex-wrap: wrap;">
+                        <span style="font-weight: 800; font-size: 14px; color: ${cfg.titleColor}; display: flex; align-items: center;">
+                            ${cfg.icon}&nbsp;${a.titulo} ${badgeNovo}
+                        </span>
                         <span style="font-size: 10px; font-weight: 800; background: rgba(0,0,0,0.06); color: ${cfg.titleColor}; padding: 2px 8px; border-radius: 10px;">
                             ${cfg.tag} · HUB: ${a.hub_alvo || 'TODOS'}
                         </span>
                     </div>
                     <div style="font-size: 13px; color: #1e293b; line-height: 1.5; white-space: pre-wrap;">${a.mensagem}</div>
-                    <div style="font-size: 10.5px; color: #64748b; margin-top: 8px; text-align: right;">
-                        Publicado por <b>${a.criado_por || 'Gestão'}</b> ${a.data_criacao ? 'em ' + a.data_criacao : ''}
+                    <div style="display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; color: #64748b; margin-top: 8px; flex-wrap: wrap; gap: 6px;">
+                        <span style="font-weight: 700; color: #0369a1;">${tempoStr}</span>
+                        <span>Publicado por <b>${a.criado_por || 'Gestão'}</b> ${a.data_criacao ? 'em ' + a.data_criacao : ''}</span>
                     </div>
                 </div>
             `;
@@ -828,6 +908,82 @@ function excluirUser(u) {
 // ==========================================
 // FUNÇÕES DO TÓPICO: GERENCIAR ALERTAS
 // ==========================================
+const TODOS_CARGOS_SISTEMA = [
+    "GERENTE",
+    "COORDENADOR",
+    "ANALISTA",
+    "MONITOR GRAU 2",
+    "MONITOR GRAU 1"
+];
+let cargosSelecionadosAlerta = new Set(); // Vazio = Todos os Cargos
+
+function toggleMenuCargosAlerta(event) {
+    if (event) event.stopPropagation();
+    const menu = document.getElementById('menu-cargos-alerta');
+    if (!menu) return;
+    renderizarMenuCargosAlerta();
+    menu.style.display = (menu.style.display === 'block') ? 'none' : 'block';
+}
+
+function atualizarLabelCargosAlerta() {
+    const lbl = document.getElementById('label-cargos-alerta');
+    if (!lbl) return;
+    const arr = Array.from(cargosSelecionadosAlerta);
+    if (arr.length === 0 || arr.length === TODOS_CARGOS_SISTEMA.length) {
+        lbl.innerText = "Todos os Cargos";
+    } else if (arr.length === 1) {
+        lbl.innerText = arr[0];
+    } else {
+        lbl.innerText = `${arr.length} cargos selecionados`;
+    }
+}
+
+function renderizarMenuCargosAlerta() {
+    const menu = document.getElementById('menu-cargos-alerta');
+    if (!menu) return;
+    const todosAtivo = cargosSelecionadosAlerta.size === 0;
+
+    let html = `
+        <div onclick="selecionarTodosCargosAlerta(event)" style="padding: 8px 12px; cursor: pointer; font-size: 12.5px; font-weight: 800; color: ${todosAtivo ? '#ffffff' : '#1a237e'}; background: ${todosAtivo ? '#2563eb' : 'transparent'}; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center;">
+            <span>Todos os Cargos</span>
+            ${todosAtivo ? '<span>✓</span>' : ''}
+        </div>
+    `;
+
+    html += TODOS_CARGOS_SISTEMA.map(c => {
+        const marcado = cargosSelecionadosAlerta.has(c);
+        return `
+            <label onclick="event.stopPropagation()" style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; cursor: pointer; font-size: 12px; font-weight: ${marcado ? '800' : '600'}; color: ${marcado ? '#1a237e' : '#334155'}; background: ${marcado ? '#eff6ff' : 'transparent'};">
+                <input type="checkbox" ${marcado ? 'checked' : ''} onchange="alternarCheckCargoAlerta('${c}', this.checked)" style="width: 15px; height: 15px; accent-color: #1a237e; cursor: pointer; margin: 0;">
+                <span>${c}</span>
+            </label>
+        `;
+    }).join('');
+
+    menu.innerHTML = html;
+    atualizarLabelCargosAlerta();
+}
+
+function selecionarTodosCargosAlerta(event) {
+    if (event) event.stopPropagation();
+    cargosSelecionadosAlerta.clear();
+    renderizarMenuCargosAlerta();
+    const menu = document.getElementById('menu-cargos-alerta');
+    if (menu) menu.style.display = 'none';
+}
+
+function alternarCheckCargoAlerta(cargo, marcado) {
+    if (marcado) {
+        cargosSelecionadosAlerta.add(cargo);
+    } else {
+        cargosSelecionadosAlerta.delete(cargo);
+    }
+    if (cargosSelecionadosAlerta.size === TODOS_CARGOS_SISTEMA.length) {
+        cargosSelecionadosAlerta.clear();
+    }
+    renderizarMenuCargosAlerta();
+}
+
 function renderizarListaAlertasConfig() {
     const cont = document.getElementById('lista-alertas-sistema');
     if (!cont) return;
@@ -838,28 +994,34 @@ function renderizarListaAlertasConfig() {
     }
 
     cont.innerHTML = listaAlertasSistema.map(a => {
-        const isAtivo = String(a.ativo || 'SIM').toUpperCase() === 'SIM';
+        const isAtivo = String(a.ativo || 'SIM').toUpperCase() === 'SIM' && (a.restante_seg === undefined || a.restante_seg > 0);
         const prio = String(a.prioridade || 'INFO').toUpperCase();
         const corBorda = prio === 'URGENTE' ? '#ef4444' : (prio === 'WARN' ? '#f59e0b' : '#0284c7');
         const badgeAoAbrir = String(a.exibir_ao_abrir || 'SIM').toUpperCase() === 'SIM'
-            ? `<span style="background:#e0e7ff; color:#1d4ed8; padding:2px 6px; border-radius:6px; font-size:10px; font-weight:800;">🚀 Abre no Login</span>`
+            ? `<span style="background:#e0e7ff; color:#1d4ed8; padding:2px 6px; border-radius:6px; font-size:10px; font-weight:800;">🚀 Abre 1x no Login</span>`
             : `<span style="background:#f1f5f9; color:#64748b; padding:2px 6px; border-radius:6px; font-size:10px; font-weight:700;">📥 Apenas na Caixa (✉️)</span>`;
+
+        const timerBadge = isAtivo && a.restante_seg > 0
+            ? `<span style="background:#dcfce7; color:#15803d; border:1px solid #86efac; padding:2px 6px; border-radius:6px; font-size:10px; font-weight:800;">⏱️ ${formatarTempoRestante12h(a.restante_seg)} restantes</span>`
+            : `<span style="background:#fee2e2; color:#b91c1c; padding:2px 6px; border-radius:6px; font-size:10px; font-weight:800;">⌛ Expirado / Pausado</span>`;
 
         return `
             <div style="background: #ffffff; border: 1px solid #e2e8f0; border-left: 4px solid ${corBorda}; border-radius: 8px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; gap: 10px; opacity: ${isAtivo ? '1' : '0.6'};">
                 <div style="flex: 1; min-width: 0;">
-                    <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                    <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
                         <b style="color: #0f172a; font-size: 13px;">${a.titulo}</b>
                         <span style="background:#f8fafc; border:1px solid #cbd5e1; color:#334155; padding:1px 6px; border-radius:6px; font-size:10px; font-weight:800;">HUB: ${a.hub_alvo || 'TODOS'}</span>
+                        <span style="background:#fef3c7; border:1px solid #fde68a; color:#92400e; padding:1px 6px; border-radius:6px; font-size:10px; font-weight:800;">CARGO: ${a.cargos_alvo || 'TODOS'}</span>
                         ${badgeAoAbrir}
+                        ${timerBadge}
                     </div>
-                    <div style="font-size: 12px; color: #475569; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    <div style="font-size: 12px; color: #475569; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                         ${a.mensagem}
                     </div>
                 </div>
                 <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
-                    <button onclick="alternarStatusAlertaSistema(${a.id}, '${isAtivo ? 'NÃO' : 'SIM'}')" style="background: ${isAtivo ? '#dcfce7' : '#f1f5f9'}; color: ${isAtivo ? '#15803d' : '#64748b'}; border: 1px solid ${isAtivo ? '#86efac' : '#cbd5e1'}; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 800; cursor: pointer;">
-                        ${isAtivo ? '🟢 Ativo' : '⚪ Pausado'}
+                    <button onclick="alternarStatusAlertaSistema(${a.id}, '${isAtivo ? 'NÃO' : 'SIM'}')" title="Clique para pausar ou renovar por +12h" style="background: ${isAtivo ? '#dcfce7' : '#f1f5f9'}; color: ${isAtivo ? '#15803d' : '#64748b'}; border: 1px solid ${isAtivo ? '#86efac' : '#cbd5e1'}; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 800; cursor: pointer;">
+                        ${isAtivo ? '🟢 Ativo' : '🔄 Ativar +12h'}
                     </button>
                     <button class="btn-edit" onclick="editarAlertaSistema(${a.id})">✏️</button>
                     <button class="btn-del" onclick="excluirAlertaSistema(${a.id})">🗑️</button>
@@ -876,6 +1038,8 @@ function limparFormularioAlerta() {
     document.getElementById('alerta-prioridade').value = 'INFO';
     document.getElementById('alerta-hub').value = 'TODOS';
     document.getElementById('alerta-exibir-abrir').checked = true;
+    cargosSelecionadosAlerta.clear();
+    renderizarMenuCargosAlerta();
     document.getElementById('titulo-form-alerta').innerText = '📢 Criar / Disparar Novo Alerta';
     const btnCancel = document.getElementById('btn-cancelar-edicao-alerta');
     if (btnCancel) btnCancel.style.display = 'none';
@@ -890,6 +1054,14 @@ function editarAlertaSistema(idAlerta) {
     document.getElementById('alerta-prioridade').value = a.prioridade || 'INFO';
     document.getElementById('alerta-hub').value = a.hub_alvo || 'TODOS';
     document.getElementById('alerta-exibir-abrir').checked = String(a.exibir_ao_abrir || 'SIM').toUpperCase() === 'SIM';
+
+    cargosSelecionadosAlerta.clear();
+    const cargosStr = String(a.cargos_alvo || 'TODOS').toUpperCase().trim();
+    if (cargosStr && cargosStr !== 'TODOS') {
+        cargosStr.split(',').map(x => x.trim()).filter(Boolean).forEach(c => cargosSelecionadosAlerta.add(c));
+    }
+    renderizarMenuCargosAlerta();
+
     document.getElementById('titulo-form-alerta').innerText = `✏️ Editando Alerta #${a.id}`;
     const btnCancel = document.getElementById('btn-cancelar-edicao-alerta');
     if (btnCancel) btnCancel.style.display = 'inline-flex';
@@ -901,6 +1073,7 @@ function salvarAlertaSistema() {
     const mensagem = document.getElementById('alerta-mensagem').value.trim();
     const prioridade = document.getElementById('alerta-prioridade').value;
     const hub = document.getElementById('alerta-hub').value.trim().toUpperCase() || 'TODOS';
+    const cargos = cargosSelecionadosAlerta.size > 0 ? Array.from(cargosSelecionadosAlerta).join(', ') : 'TODOS';
     const exibirAoAbrir = document.getElementById('alerta-exibir-abrir').checked ? 'SIM' : 'NÃO';
 
     if (!titulo || !mensagem) {
@@ -916,6 +1089,7 @@ function salvarAlertaSistema() {
             mensagem: mensagem,
             prioridade: prioridade,
             hub_alvo: hub,
+            cargos_alvo: cargos,
             exibir_ao_abrir: exibirAoAbrir,
             ativo: 'SIM',
             criado_por: currentUser ? currentUser.username.toUpperCase() : 'GESTÃO'
@@ -926,7 +1100,7 @@ function salvarAlertaSistema() {
         if (res.sucesso) {
             limparFormularioAlerta();
             carregarAlertasSistema(false);
-            mostrarToastRobo("🔔 Alerta publicado com sucesso!");
+            mostrarToastRobo("🔔 Alerta publicado por 12 horas!");
         } else {
             alert("Erro ao salvar alerta: " + (res.erro || ""));
         }
@@ -1338,8 +1512,12 @@ class OcorrenciaEditor {
 }
 
 function salvarEstadoColunas() {
-    if (gridApi && currentUser) localStorage.setItem('gridState_v2_' + currentUser.username, JSON.stringify(gridApi.getColumnState()));
+    if (gridApi && currentUser) {
+        localStorage.setItem('gridState_v2_' + currentUser.username, JSON.stringify(gridApi.getColumnState()));
+        atualizarMenuColunasPlanilhaUI();
+    }
 }
+
 function restaurarEstadoColunas() {
     if (!gridApi || !currentUser) return;
     const es = localStorage.getItem('gridState_v2_' + currentUser.username);
@@ -1353,7 +1531,63 @@ function restaurarEstadoColunas() {
     } else {
         gridApi.sizeColumnsToFit();
     }
+    atualizarMenuColunasPlanilhaUI();
 }
+
+function toggleMenuColunasPlanilha(event) {
+    if (event) event.stopPropagation();
+    const menu = document.getElementById('menu-colunas-planilha');
+    if (!menu) return;
+    atualizarMenuColunasPlanilhaUI();
+    menu.style.display = (menu.style.display === 'block') ? 'none' : 'block';
+}
+
+function atualizarMenuColunasPlanilhaUI() {
+    if (!gridApi) return;
+    const cont = document.getElementById('lista-checkboxes-colunas-planilha');
+    const lbl = document.getElementById('label-btn-colunas-planilha');
+    if (!cont) return;
+
+    const cols = gridApi.getColumns() || [];
+    let visiveis = 0;
+
+    cont.innerHTML = cols.map(c => {
+        const colId = c.getColId();
+        const nome = c.getColDef().headerName || colId;
+        const isVis = c.isVisible();
+        if (isVis) visiveis++;
+        return `
+            <label onclick="event.stopPropagation()" style="display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 5px; cursor: pointer; font-size: 12.5px; font-weight: ${isVis ? '700' : '600'}; color: ${isVis ? '#0f172a' : '#64748b'}; background: ${isVis ? '#f8fafc' : 'transparent'};">
+                <input type="checkbox" ${isVis ? 'checked' : ''} onchange="alternarVisibilidadeColunaPlanilha('${colId}', this.checked)" style="width: 15px; height: 15px; accent-color: #1a237e; cursor: pointer; margin: 0;">
+                <span>${nome}</span>
+            </label>
+        `;
+    }).join('');
+
+    if (lbl) {
+        lbl.innerText = (visiveis === cols.length) ? 'Colunas (Todas)' : `Colunas (${visiveis}/${cols.length})`;
+    }
+}
+
+function alternarVisibilidadeColunaPlanilha(colId, mostrar) {
+    if (!gridApi) return;
+    const cols = gridApi.getColumns() || [];
+    const totalVisiveis = cols.filter(c => c.isVisible()).length;
+    if (!mostrar && totalVisiveis <= 1) {
+        atualizarMenuColunasPlanilhaUI();
+        return alert("Pelo menos uma coluna deve permanecer visível na planilha!");
+    }
+    gridApi.setColumnsVisible([colId], mostrar);
+    salvarEstadoColunas();
+}
+
+function mostrarTodasColunasPlanilha() {
+    if (!gridApi) return;
+    const ids = (gridApi.getColumns() || []).map(c => c.getColId());
+    gridApi.setColumnsVisible(ids, true);
+    salvarEstadoColunas();
+}
+
 function atualizarContadorRotas() { if (gridApi && document.getElementById('total-rotas-planilha')) document.getElementById('total-rotas-planilha').innerText = gridApi.getDisplayedRowCount(); }
 
 const columnDefs = [
@@ -2140,7 +2374,7 @@ function iniciarSistemaAposLogin() {
         carregarTickets();
         carregarAlertasSistema(false);
     }, 5000);
-    
+
     setInterval(() => {
         atualizarCountdowns();
         if (roboOnlineAtual && statusSessaoOktaAtual === 'LOGADO') {
@@ -3376,6 +3610,14 @@ function exportarExcelFiltroCompleto() {
 document.addEventListener('click', function(e) {
     if (!e.target.closest('.color-dropdown')) document.querySelectorAll(".color-menu").forEach(m => m.classList.remove('show'));
     if (!e.target.closest('.go-cards-filter-dropdown')) document.getElementById('go-menu-filtro-cards')?.classList.remove('show');
+    if (!e.target.closest('#colunas-planilha-wrap')) {
+        const mCol = document.getElementById('menu-colunas-planilha');
+        if (mCol) mCol.style.display = 'none';
+    }
+    if (!e.target.closest('#alerta-cargos-dropdown-wrap')) {
+        const mCar = document.getElementById('menu-cargos-alerta');
+        if (mCar) mCar.style.display = 'none';
+    }
     const sb = document.getElementById("sidebar"), mI = document.querySelector(".menu-icon");
     if (sb && sb.classList.contains("aberta") && !sb.contains(e.target) && !mI.contains(e.target)) { sb.classList.remove("aberta"); document.getElementById("main-content").classList.remove("empurrado"); }
     const uM = document.getElementById('userMenu'); if (uM && uM.classList.contains('show') && !e.target.closest('.user-profile')) uM.classList.remove('show');

@@ -146,6 +146,9 @@ def garantir_tabela_usuarios():
     )
 
 
+DURACAO_ALERTA_SEGUNDOS = 12 * 3600  # 12 horas (43.200 segundos)
+
+
 def garantir_tabela_alertas():
   with motor_db.begin() as conn:
     conn.execute(text("""
@@ -155,12 +158,216 @@ def garantir_tabela_alertas():
                 mensagem TEXT NOT NULL,
                 prioridade VARCHAR(30) DEFAULT 'INFO',
                 hub_alvo VARCHAR(100) DEFAULT 'TODOS',
+                cargos_alvo TEXT DEFAULT 'TODOS',
                 exibir_ao_abrir VARCHAR(10) DEFAULT 'SIM',
                 ativo VARCHAR(10) DEFAULT 'SIM',
                 criado_por VARCHAR(50) DEFAULT '',
-                data_criacao VARCHAR(50) DEFAULT ''
+                data_criacao VARCHAR(50) DEFAULT '',
+                expira_ts DOUBLE PRECISION DEFAULT 0
             )
         """))
+    conn.execute(
+        text(
+            "ALTER TABLE alertas_sistema ADD COLUMN IF NOT EXISTS cargos_alvo"
+            " TEXT DEFAULT 'TODOS'"
+        )
+    )
+    conn.execute(
+        text(
+            "ALTER TABLE alertas_sistema ADD COLUMN IF NOT EXISTS expira_ts"
+            " DOUBLE PRECISION DEFAULT 0"
+        )
+    )
+
+
+@app.get("/alertas_sistema")
+def listar_alertas_sistema():
+  try:
+    garantir_tabela_alertas()
+    agora_ts = time.time()
+    with motor_db.begin() as conn:
+      # Desativa automaticamente alertas cujo timer de 12h já expirou
+      conn.execute(
+          text("""
+                UPDATE alertas_sistema
+                SET ativo = 'NÃO'
+                WHERE ativo = 'SIM' AND expira_ts > 0 AND expira_ts <= :agora
+            """),
+          {"agora": agora_ts},
+      )
+
+      rows = conn.execute(text("""
+                SELECT id, titulo, mensagem, prioridade, hub_alvo,
+                       COALESCE(cargos_alvo, 'TODOS'), exibir_ao_abrir, ativo,
+                       criado_por, data_criacao, COALESCE(expira_ts, 0)
+                FROM alertas_sistema
+                ORDER BY id DESC
+            """)).fetchall()
+
+      lista = []
+      for r in rows:
+        exp_ts = float(r[10] or 0)
+        ativo_str = r[7] or "SIM"
+        restante_seg = (
+            max(0, int(exp_ts - agora_ts))
+            if (ativo_str == "SIM" and exp_ts > 0)
+            else 0
+        )
+        lista.append({
+            "id": r[0],
+            "titulo": r[1] or "",
+            "mensagem": r[2] or "",
+            "prioridade": r[3] or "INFO",
+            "hub_alvo": r[4] or "TODOS",
+            "cargos_alvo": r[5] or "TODOS",
+            "exibir_ao_abrir": r[6] or "SIM",
+            "ativo": ativo_str,
+            "criado_por": r[8] or "",
+            "data_criacao": r[9] or "",
+            "expira_ts": exp_ts,
+            "restante_seg": restante_seg,
+        })
+      return lista
+  except Exception:
+    return []
+
+
+@app.post("/salvar_alerta_sistema")
+async def salvar_alerta_sistema(request: Request):
+  dados = await request.json()
+  alerta_id = dados.get("id")
+  titulo = str(dados.get("titulo", "")).strip()
+  mensagem = str(dados.get("mensagem", "")).strip()
+  prioridade = str(dados.get("prioridade", "INFO")).upper().strip()
+  hub_alvo = str(dados.get("hub_alvo", "TODOS")).upper().strip() or "TODOS"
+  cargos_alvo = (
+      str(dados.get("cargos_alvo", "TODOS")).upper().strip() or "TODOS"
+  )
+  exibir_ao_abrir = (
+      "SIM"
+      if str(dados.get("exibir_ao_abrir", "SIM")).upper().strip() == "SIM"
+      else "NÃO"
+  )
+  ativo = (
+      "SIM"
+      if str(dados.get("ativo", "SIM")).upper().strip() == "SIM"
+      else "NÃO"
+  )
+  criado_por = str(dados.get("criado_por", "Sistema")).strip()
+
+  fuso_br = datetime.timezone(datetime.timedelta(hours=-3))
+  agora_str = datetime.datetime.now(fuso_br).strftime("%d/%m/%Y %H:%M")
+  novo_expira_ts = time.time() + DURACAO_ALERTA_SEGUNDOS
+
+  if not titulo or not mensagem:
+    return {
+        "sucesso": False,
+        "erro": "Preencha o título e a mensagem do alerta.",
+    }
+
+  try:
+    garantir_tabela_alertas()
+    with motor_db.begin() as conn:
+      if alerta_id:
+        conn.execute(
+            text("""
+                    UPDATE alertas_sistema
+                    SET titulo = :t, mensagem = :m, prioridade = :p,
+                        hub_alvo = :h, cargos_alvo = :ca,
+                        exibir_ao_abrir = :ea, ativo = :at,
+                        data_criacao = :dc, expira_ts = :ets
+                    WHERE id = :id
+                """),
+            {
+                "t": titulo,
+                "m": mensagem,
+                "p": prioridade,
+                "h": hub_alvo,
+                "ca": cargos_alvo,
+                "ea": exibir_ao_abrir,
+                "at": ativo,
+                "dc": agora_str,
+                "ets": novo_expira_ts,
+                "id": int(alerta_id),
+            },
+        )
+      else:
+        conn.execute(
+            text("""
+                    INSERT INTO alertas_sistema (
+                        titulo, mensagem, prioridade, hub_alvo, cargos_alvo,
+                        exibir_ao_abrir, ativo, criado_por, data_criacao, expira_ts
+                    )
+                    VALUES (:t, :m, :p, :h, :ca, :ea, :at, :cp, :dc, :ets)
+                """),
+            {
+                "t": titulo,
+                "m": mensagem,
+                "p": prioridade,
+                "h": hub_alvo,
+                "ca": cargos_alvo,
+                "ea": exibir_ao_abrir,
+                "at": ativo,
+                "cp": criado_por,
+                "dc": agora_str,
+                "ets": novo_expira_ts,
+            },
+        )
+    return {"sucesso": True}
+  except Exception as e:
+    return {"sucesso": False, "erro": str(e)}
+
+
+@app.post("/toggle_alerta_sistema")
+async def toggle_alerta_sistema(request: Request):
+  dados = await request.json()
+  alerta_id = dados.get("id")
+  novo_ativo = (
+      "SIM"
+      if str(dados.get("ativo", "NÃO")).upper().strip() == "SIM"
+      else "NÃO"
+  )
+  try:
+    garantir_tabela_alertas()
+    with motor_db.begin() as conn:
+      if novo_ativo == "SIM":
+        # Ao reativar um alerta, renova o timer para +12 horas
+        fuso_br = datetime.timezone(datetime.timedelta(hours=-3))
+        agora_str = datetime.datetime.now(fuso_br).strftime("%d/%m/%Y %H:%M")
+        conn.execute(
+            text("""
+                        UPDATE alertas_sistema
+                        SET ativo = 'SIM', expira_ts = :ets, data_criacao = :dc
+                        WHERE id = :id
+                    """),
+            {
+                "ets": time.time() + DURACAO_ALERTA_SEGUNDOS,
+                "dc": agora_str,
+                "id": int(alerta_id),
+            },
+        )
+      else:
+        conn.execute(
+            text("UPDATE alertas_sistema SET ativo = 'NÃO' WHERE id = :id"),
+            {"id": int(alerta_id)},
+        )
+    return {"sucesso": True}
+  except Exception as e:
+    return {"sucesso": False, "erro": str(e)}
+
+
+@app.delete("/deletar_alerta_sistema/{alerta_id}")
+def deletar_alerta_sistema(alerta_id: int):
+  try:
+    garantir_tabela_alertas()
+    with motor_db.begin() as conn:
+      conn.execute(
+          text("DELETE FROM alertas_sistema WHERE id = :id"),
+          {"id": int(alerta_id)},
+      )
+    return {"sucesso": True}
+  except Exception as e:
+    return {"sucesso": False, "erro": str(e)}
 
 
 @app.post("/login")
