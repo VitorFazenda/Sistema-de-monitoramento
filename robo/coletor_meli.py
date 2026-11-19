@@ -28,7 +28,7 @@ load_dotenv(CAMINHO_ENV)
 DB_URL = os.getenv("DATABASE_URL")
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 MELI_USER = os.getenv("MELI_USER", "ext_vifazend")
-MELI_PASS = os.getenv("MELI_PASS", "Palido%2696%")
+MELI_PASS = os.getenv("MELI_PASS", "Bulbo@3497@")
 OKTA_SECRET = os.getenv("OKTA_SECRET", "").strip()
 HEADLESS_MODE = os.getenv("HEADLESS_MODE", "False").lower() in (
     "true",
@@ -45,7 +45,7 @@ CONTAS_MELI = {
     "Vitor.Martins": {"user": MELI_USER, "pass": MELI_PASS},
     "Larissa.Campos": {
         "user": os.getenv("MELI_USER_2", "ext_camplari"),
-        "pass": os.getenv("MELI_PASS_2", "Ensalada@0533."),
+        "pass": os.getenv("MELI_PASS_2", "Huesped.0627."),
     },
 }
 
