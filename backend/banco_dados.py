@@ -31,7 +31,7 @@ def alimentar_banco():
                 hubs_atribuidos VARCHAR(255)
             )
         """))
-        # Cria a sua conta de GERENTE por padrão se ela não existir
+        # Conta de gerente criada por padrão
         res = conexao.execute(text("SELECT count(*) FROM usuarios WHERE username='vitor'"))
         if res.scalar() == 0:
             conexao.execute(text("INSERT INTO usuarios (username, password, cargo, hubs_atribuidos) VALUES ('vitor', 'admin123', 'GERENTE', 'TODOS')"))

@@ -28,7 +28,7 @@ load_dotenv(CAMINHO_ENV)
 DB_URL = os.getenv("DATABASE_URL")
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 MELI_USER = os.getenv("MELI_USER", "ext_vifazend")
-MELI_PASS = os.getenv("MELI_PASS", "Palido%2696%")
+MELI_PASS = os.getenv("MELI_PASS", "Bulbo@3497@")
 OKTA_SECRET = os.getenv("OKTA_SECRET", "").strip()
 HEADLESS_MODE = os.getenv("HEADLESS_MODE", "False").lower() in (
     "true",
@@ -39,13 +39,13 @@ HEADLESS_MODE = os.getenv("HEADLESS_MODE", "False").lower() in (
 FUSO_BR = datetime.timezone(datetime.timedelta(hours=-3))
 
 # ==========================================
-# MAPEAMENTO SEGURO DE CONTAS
+# MAPEAMENTO DE CONTAS MELI
 # ==========================================
 CONTAS_MELI = {
     "Vitor.Martins": {"user": MELI_USER, "pass": MELI_PASS},
     "Larissa.Campos": {
         "user": os.getenv("MELI_USER_2", "ext_camplari"),
-        "pass": os.getenv("MELI_PASS_2", "Ensalada@0533."),
+        "pass": os.getenv("MELI_PASS_2", "Huesped.0627."),
     },
 }
 
@@ -65,7 +65,7 @@ def carregar_ultima_conta_logada() -> str:
 
 
 def salvar_ultima_conta_logada(nome_conta: str):
-  """Salva a conta atual para que na próxima expiração de sessão tente logar nela"""
+  """Salva a conta atual e na próxima expiração de sessão tente logar novamente"""
   try:
     with open(ARQUIVO_ULTIMA_CONTA, "w", encoding="utf-8") as f:
       json.dump({"conta": nome_conta}, f)
@@ -99,7 +99,7 @@ DIAS_SEMANA = [
 ]
 
 # ==========================================
-# WATCHDOG E LIMPEZA DE PROCESSOS (ANTI-TRAVAMENTO)
+# LIMPEZA DE PROCESSOS E PREVENÇÃO
 # ==========================================
 ULTIMA_ATIVIDADE_MOTOR = time.time()
 EM_ESPERA_LOGIN_OKTA = False
@@ -111,7 +111,7 @@ def pulsar_watchdog():
 
 
 def limpar_travas_sessao():
-  """Remove arquivos SingletonLock caso o Chromium tenha fechado abruptamente no servidor"""
+  """Remove arquivos SingletonLock caso o Chromium tenha fechado no servidor"""
   if not os.path.exists(PASTA_SESSAO):
     return
   for nome_lock in ["SingletonLock", "SingletonCookie", "SingletonSocket"]:
@@ -124,7 +124,7 @@ def limpar_travas_sessao():
 
 
 def matar_chromium_zumbi():
-  """Força o encerramento de processos órfãos do Chromium no Linux"""
+  """Forçar o encerramento de processos vazios do Chromium Linux"""
   if os.name != "nt":
     try:
       subprocess.run(
@@ -279,7 +279,7 @@ def daemon_heartbeat():
 
 
 # ==========================================
-# MÓDULO DE LOGIN AUTOMATIZADO (MULTI-CONTA + AUTO-RELOAD 5 MIN)
+# MÓDULO DE LOGIN AUTOMATIZADO 
 # ==========================================
 def clicar_botao_avancar_okta(page):
   """Localiza e clica no botão de submissão do Okta (Próximo / Verificar / Confirmar)"""
@@ -338,7 +338,7 @@ def pagina_esta_no_okta(page):
 def garantir_login(page, forcar_recarregamento=False):
   global CONTA_ATUAL
   CONTA_ATUAL = carregar_ultima_conta_logada()
-  log_painel("🔎 Verificando sessão do Mercado Livre...")
+  log_painel("🔎 Verificando login do site Mercado Livre...")
   url_atual = page.url or ""
 
   try:
@@ -355,7 +355,7 @@ def garantir_login(page, forcar_recarregamento=False):
 
   if not pagina_esta_no_okta(page):
     informar_status_login("LOGADO")
-    log_painel("✅ Sessão ativa. Não foi necessário realizar login.")
+    log_painel("✅ Ativo. Não foi necessário realizar login.")
     return True
 
   log_painel(
@@ -411,7 +411,7 @@ def garantir_login(page, forcar_recarregamento=False):
         )
       else:
         log_painel(
-            "🔄 Reiniciando página de login do Meli a pedido do painel..."
+            "🔄 Reiniciando página de login do Meli, solicitado pelo painel..."
         )
 
       aviso_okta_enviado = False
@@ -450,7 +450,7 @@ def garantir_login(page, forcar_recarregamento=False):
             and (time.time() - ultimo_user_preenchido) > 8
         ):
           log_painel(
-              f"👤 Preenchendo utilizador ({usuario_meli_atual}) e avançando..."
+              f"👤 Preenchendo usuário ({usuario_meli_atual}) e avançando..."
           )
           campo_user.first.fill("")
           campo_user.first.fill(usuario_meli_atual)
@@ -466,7 +466,7 @@ def garantir_login(page, forcar_recarregamento=False):
           ' a:has-text("Inserir um código"), a:has-text("Enter a code")'
       )
       if btn_fator.count() > 0 and btn_fator.first.is_visible():
-        log_painel("📲 Selecionando opção de código Okta Verify...")
+        log_painel("📲 Selecionando opção de código Okta...")
         btn_fator.first.click()
         time.sleep(2.5)
         continue
@@ -511,7 +511,7 @@ def garantir_login(page, forcar_recarregamento=False):
           if is_tela_senha and not codigo_recebido:
             if (time.time() - ultima_senha_preenchida) > 6:
               log_painel(
-                  "🔑 Tela de palavra-passe detectada! Inserindo senha"
+                  "🔑 Tela de senha detectada! Inserindo"
                   " automaticamente..."
               )
               input_alvo.fill("")
@@ -519,7 +519,7 @@ def garantir_login(page, forcar_recarregamento=False):
               clicar_botao_avancar_okta(page)
               ultima_senha_preenchida = time.time()
               log_painel(
-                  "⏳ Palavra-passe enviada! Aguardando redirecionamento..."
+                  "⏳ Senha enviada! Aguardando redirecionamento..."
               )
               time.sleep(4)
               continue
@@ -580,7 +580,7 @@ def traduzir_status_meli(status_bruto: str, coletados_int: int) -> str:
 
 
 # ==========================================
-# MÓDULO 1: RASPAGEM DE MONITORAMENTO (ALTA PRECISÃO + PROTEÇÃO DE EDIÇÕES MANUAIS)
+# MÓDULO 1: RASPAGEM DE MONITORAMENTO 
 # ==========================================
 def aguardar_carregamento_meli(page, tempo_max=15):
   """Aguarda os spinners e skeletons do Mercado Livre sumirem após limpar ou aplicar filtros"""
@@ -1577,7 +1577,7 @@ def executar_relatorio(page, lista_hubs, ticket):
           log_painel("❌ Erro: Nenhum HUB válido para relatório.")
           return False
       else:
-        log_painel("🌎 Extraindo relatório Global (Sem filtro de depósito).")
+        log_painel("🌎 Extraindo relatório Geral (Sem filtro de depósito).")
 
       btn_ver = page.locator(
           'span[data-andes-button-content="true"]:has-text("Ver resultados")'
@@ -1823,7 +1823,7 @@ def iniciar_orquestrador():
             cmd_standby = ler_comando_okta_api()
             if cmd_standby.get("reiniciar_login"):
               log_painel(
-                  "🔄 Comando de recarregamento recebido! Reiniciando"
+                  "🔄 Comando de recarregar recebido! Reiniciando"
                   " verificação de login..."
               )
               garantir_login(page, forcar_recarregamento=True)
@@ -1988,7 +1988,7 @@ def iniciar_orquestrador():
     except Exception as e_outer:
       pulsar_watchdog()
       matar_chromium_zumbi()
-      log_painel(f"🔄 Reiniciando motor do navegador ({e_outer})...")
+      log_painel(f"🔄 Reiniciando sistema do navegador ({e_outer})...")
       time.sleep(5)
 
 

@@ -3,7 +3,7 @@ import pandas as pd
 def analisar_relatorio():
     caminho_arquivo = "relatorio_rotas_ontem.xlsx"
     
-    print("⏳ Desvendando o verdadeiro formato do relatório...")
+    print("⏳ Analizando o formato do relatório...")
     
     try:
         # Tentativa 1: Ler como CSV padrão (separado por vírgula)
@@ -13,7 +13,7 @@ def analisar_relatorio():
             # Tentativa 2: Ler como CSV padrão brasileiro (separado por ponto e vírgula)
             df = pd.read_csv(caminho_arquivo, sep=';', encoding='latin1')
         except Exception:
-            print("❌ Erro: O arquivo não é um CSV válido. Precisaremos abrir no Bloco de Notas para investigar.")
+            print("❌ Erro: O arquivo não é um CSV válido.")
             return
     
     print(f"✅ Sucesso! O arquivo tem {df.shape[0]} linhas e {df.shape[1]} colunas.")

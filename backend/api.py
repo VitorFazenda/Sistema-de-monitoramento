@@ -42,7 +42,7 @@ motor_db = create_engine(
 )
 
 # ==========================================
-# CACHE EM MEMÓRIA DE ALTA VELOCIDADE (JSON PRÉ-SERIALIZADO)
+# CACHE EM MEMÓRIA (JSON PRÉ-SERIALIZADO)
 # ==========================================
 CACHE_DADOS = {
     "rotas_json": None,
@@ -167,7 +167,7 @@ def listar_alertas_sistema():
     garantir_tabela_alertas()
     agora_ts = time.time()
     with motor_db.begin() as conn:
-      # Desativa automaticamente alertas cujo timer de 12h já expirou
+      # Desativa automaticamente alertas quando as 12h se expirar
       conn.execute(
           text("""
                 UPDATE alertas_sistema

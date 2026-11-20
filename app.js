@@ -1,7 +1,7 @@
 // ==========================================
 // CONFIGURAÇÃO DO SERVIDOR (MUDE AQUI PARA PRODUÇÃO)
 // ==========================================
-// Quando for enviar para o GitHub Pages, altere esta linha para o URL do seu servidor (ex: "https://api.seuservidor.com")
+
 const API_BASE_URL = "https://147.15.93.48.sslip.io";
 
 // ==========================================
@@ -90,7 +90,7 @@ function mostrarToastRobo(mensagem = "Informações atualizadas pelo robô!") {
     }, 3000);
 }
 
-// Comparadores para ordenação perfeita de menor para maior e maior para menor
+// Ordenadores de menor para maior e maior para menor
 function comparadorNumerico(a, b) {
     const strA = String(a ?? '').replace(/[^\d.-]/g, '');
     const strB = String(b ?? '').replace(/[^\d.-]/g, '');
@@ -484,7 +484,7 @@ function obterMetaAtiva(hubAlvo) {
 }
 
 // ==========================================
-// CÓPIA INTELIGENTE E ATALHOS GLOBAIS (CTRL+Z / CTRL+D)
+// CÓPIA E ATALHOS GERAIS (CTRL+Z / CTRL+D)
 // ==========================================
 document.addEventListener('copy', function(e) {
     const selection = window.getSelection(); if (selection.isCollapsed) return; 
@@ -1639,7 +1639,7 @@ class RevertidoEditor {
 }
 
 // ==========================================
-// GRELHA DE ROTAS (SEM OCORRÊNCIA E PONTUALIDADE)
+// GRELHA DE ROTAS 
 // ==========================================
 function pintarCelulaFocada(cor) {
     ultimaCorEscolhida = cor;
@@ -2579,7 +2579,7 @@ function iniciarSistemaAposLogin() {
     carregarMetas();
     carregarEdicoesOcorrencias();
     carregarEdicoesRotasAvulsas();
-    carregarAlertasSistema(true); // Verifica e dispara alertas ativos ao abrir o sistema!
+    carregarAlertasSistema(true); // Verifica e disparo de alertas ativos ao abrir o sistema!
     carregarRotas(false);
 
     setTimeout(() => {
@@ -3441,7 +3441,7 @@ function exportarEstratificacaoOC() {
 }
 
 // ==========================================
-// SUB-ABA 3: GERAL DA OPERAÇÃO (LAYOUT COMPACTO E SINCRONIZADO)
+// SUB-ABA 3: GERAL DA OPERAÇÃO 
 // ==========================================
 function gerarGeralOperacao(rawRows) {
     if (!rawRows || rawRows.length === 0) {
@@ -3524,7 +3524,7 @@ function gerarGeralOperacao(rawRows) {
         totalOfensoresBruto += rt.est;
     });
 
-    // Subtrai os pacotes revertidos apenas no consolidado de ofensores
+    // Subtrai os pacotes revertidos apenas no total de ofensores
     const totalOfensoresLiquido = Math.max(0, totalOfensoresBruto - totalRevertidosPcts);
 
     const motivosAgrupados = Object.values(mapaMotivos).map(m => {
@@ -3566,7 +3566,7 @@ function gerarGeralOperacao(rawRows) {
     renderizarGeralOperacao();
 }
 
-// Guarda quais cards de ocorrência o colaborador desmarcou no Geral da Operação
+// Guarda cards de ocorrência o usuário desmarcou no Geral da Operação
 let goCardsOcultos = new Set();
 
 function toggleMenuFiltroCardsGO(event) {
@@ -3821,7 +3821,7 @@ function exportarExcelFiltroCompleto() {
 }
 
 // ==========================================
-// MENUS, MODAIS E EXPORTAÇÃO (PLANILHA)
+// MENUS E EXPORTAÇÃO (PLANILHA)
 // ==========================================
 document.addEventListener('click', function(e) {
     if (!e.target.closest('.color-dropdown')) document.querySelectorAll(".color-menu").forEach(m => m.classList.remove('show'));
@@ -4259,7 +4259,7 @@ function salvarConfiguracao() {
 }
 
 // ==========================================
-// MODAL DE CONFIRMAÇÃO DE EXCLUSÃO DE TICKET
+// MODAL DE POP-UP CONFIRMAÇÃO DE EXCLUSÃO DE TICKET
 // ==========================================
 let ticketPendenteExclusao = null;
 
@@ -4347,7 +4347,7 @@ function confirmarExclusaoTicket() {
 }
 
 // ==========================================
-// OTIMIZADOR DE FAVICON (CORRIGE LOGO ACHATADA NA ABA DO NAVEGADOR)
+// OTIMIZADOR DE FAVICON 
 // ==========================================
 function otimizarFaviconAba() {
     const img = new Image();
@@ -4397,7 +4397,7 @@ function otimizarFaviconAba() {
             ctx.fillStyle = "#1a237e";
             ctx.fill();
 
-            // Desenha a logo recortada mantendo proporção 1:1 (sem achatar)
+            // Desenha a logo recortada mantendo proporção 1:1 (sem achatar no separador do navegador)
             const margem = 4;
             const areaUtil = size - (margem * 2);
             const escala = Math.min(areaUtil / cropW, areaUtil / cropH);
@@ -4766,7 +4766,7 @@ function aoEditarCampoRotaAvulsa(idRota, campo, novoValor, selectEl) {
     // Atualiza os cards de resumo no topo imediatamente
     renderizarKPIsRotasAvulsas();
 
-    // Salva fixo no banco de dados PostgreSQL
+    // Salva fixo no banco de dados
     fetch(`${API_BASE_URL}/salvar_edicao_avulsa`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
